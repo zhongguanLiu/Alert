@@ -16,6 +16,20 @@
   <img src="docs/assets/system_overview.png" alt="ALERT system overview" width="920">
 </p>
 
+## Demo Video
+
+<p align="center">
+  <a href="docs/assets/tanta_anchor4.mp4">
+    <img src="docs/assets/real_dog.jpg" alt="ALERT demo video" width="760">
+  </a>
+</p>
+
+<p align="center">
+  Click the cover image to open the demo video.
+</p>
+
+This video shows a typical collapse scene in a confined space. In this run, two severe collapse events occur one after another, which makes it a representative example for demonstrating the ALERT system.
+
 ## 1. Overview
 
 Secondary collapse is a major operational hazard in post-disaster rescue, where subtle local structural responses may precede abrupt failure. ALERT is an onboard LiDAR-based perception and warning framework for mobile rescue robots. Instead of using LiDAR only for mapping and localization, ALERT focuses on online structural-risk perception under weak references, platform motion, sparse non-repetitive scanning, and partial observability.
