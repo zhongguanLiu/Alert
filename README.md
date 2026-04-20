@@ -94,12 +94,11 @@ This keeps runtime artifacts out of the source tree and makes the repository por
 
 ### Simulation asset note
 
-The Gazebo simulation package expects Livox scan-pattern CSV files and mesh assets under:
+I did not include the Gazebo scan-pattern files and mesh assets in this repository because they are relatively large and would make the public code release unnecessarily heavy.
 
-- `gazebo_test/Mid360_simulation_plugin/livox_laser_simulation/scan_mode/`
-- `gazebo_test/Mid360_simulation_plugin/livox_laser_simulation/meshes/`
+As a result, this repository is sufficient for reading the code, building the main packages, and understanding the full pipeline, but the Gazebo simulation will not run out of the box unless those assets are restored locally.
 
-If those large assets are excluded from the Git repository for size control, restore them locally before launching the simulation pipeline. The code can still be built without them, but Gazebo simulation will not run correctly until they are available.
+If you need the simulation assets for reproduction, please open an Issue in this repository and I can provide them separately.
 
 ## 3. Build & Run
 
