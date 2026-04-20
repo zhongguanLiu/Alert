@@ -1,0 +1,178 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="mid360_fastlio">
+  <xacro:property name="pi_const" value="3.1415926535897931" />
+
+  <xacro:macro name="box_inertial" params="mass size_x size_y size_z">
+    <inertial>
+      <mass value="${mass}" />
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <inertia
+        ixx="${mass * (size_y * size_y + size_z * size_z) / 12.0}"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="${mass * (size_x * size_x + size_z * size_z) / 12.0}"
+        iyz="0.0"
+        izz="${mass * (size_x * size_x + size_y * size_y) / 12.0}" />
+    </inertial>
+  </xacro:macro>
+
+  <material name="mount_orange">
+    <color rgba="0.66 0.24 0.08 1.0" />
+  </material>
+
+  <material name="imu_green">
+    <color rgba="0.10 0.45 0.10 1.0" />
+  </material>
+
+  <link name="base_footprint" />
+
+  <link name="base_link">
+    <xacro:box_inertial mass="18.0" size_x="0.62" size_y="0.52" size_z="0.14" />
+
+    <visual name="base_visual">
+      <origin xyz="0.30 0.255 -0.062" rpy="0 0 ${pi_const / 2.0}" />
+      <geometry>
+        <mesh filename="package://livox_laser_simulation/meshes/tracked_vehicle.dae" />
+      </geometry>
+    </visual>
+
+    <visual name="mount_visual">
+      <origin xyz="0 0 0.106875" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.02" length="0.09375" />
+      </geometry>
+      <material name="mount_orange" />
+    </visual>
+
+    <collision name="base_collision">
+      <origin xyz="0 0 -0.01" rpy="0 0 0" />
+      <geometry>
+        <box size="0.62 0.52 0.14" />
+      </geometry>
+    </collision>
+
+  </link>
+
+  <joint name="base_link_to_base_footprint" type="fixed">
+    <parent link="base_footprint" />
+    <child link="base_link" />
+    <origin xyz="0 0 0.08" rpy="0 0 0" />
+  </joint>
+
+  <link name="livox">
+    <xacro:box_inertial mass="0.265" size_x="0.10" size_y="0.10" size_z="0.06" />
+
+    <visual name="livox_visual">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://livox_laser_simulation/meshes/livox_mid360.dae" />
+      </geometry>
+    </visual>
+
+  </link>
+
+  <joint name="livox_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="livox" />
+    <origin xyz="0 0 0.15375" rpy="0 0 0" />
+  </joint>
+
+  <link name="imu_link">
+    <xacro:box_inertial mass="0.05" size_x="0.01" size_y="0.01" size_z="0.01" />
+
+    <visual name="imu_visual">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.01 0.01 0.01" />
+      </geometry>
+      <material name="imu_green" />
+    </visual>
+
+    <collision name="imu_collision">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.01 0.01 0.01" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="livox" />
+    <child link="imu_link" />
+    <origin xyz="-0.038 0 -0.01" rpy="0 0 0" />
+  </joint>
+
+  <gazebo reference="livox">
+    <sensor type="ray" name="laser_livox">
+      <pose>0 0 0 0 0 0</pose>
+      <visualize>false</visualize>
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <plugin name="gazebo_ros_laser_controller" filename="liblivox_laser_simulation.so">
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>100</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.1415926535897931</min_angle>
+              <max_angle>3.1415926535897931</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>50</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.1415926535897931</min_angle>
+              <max_angle>3.1415926535897931</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.1</min>
+            <max>100</max>
+            <resolution>1</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.005</stddev>
+          </noise>
+        </ray>
+        <visualize>false</visualize>
+        <samples>20000</samples>
+        <downsample>1</downsample>
+        <csv_file_name>mid360-real-centr.csv</csv_file_name>
+        <publish_pointcloud_type>3</publish_pointcloud_type>
+        <ros_topic>/livox/lidar</ros_topic>
+        <frameName>livox</frameName>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="imu_link">
+    <sensor name="livox_imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>200</update_rate>
+      <visualize>false</visualize>
+      <plugin name="livox_imu_plugin" filename="libgazebo_ros_imu_sensor.so">
+        <robotNamespace>/</robotNamespace>
+        <topicName>/livox/imu</topicName>
+        <frameName>imu_link</frameName>
+        <updateRateHZ>200.0</updateRateHZ>
+        <gaussianNoise>0.0</gaussianNoise>
+        <xyzOffset>0 0 0</xyzOffset>
+        <rpyOffset>0 0 0</rpyOffset>
+        <initialOrientationAsReference>false</initialOrientationAsReference>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <gazebo>
+    <plugin name="planar_move" filename="libgazebo_ros_planar_move.so">
+      <robotNamespace>/</robotNamespace>
+      <commandTopic>/cmd_vel</commandTopic>
+      <odometryTopic>/ground_truth/odom</odometryTopic>
+      <odometryFrame>world</odometryFrame>
+      <robotBaseFrame>base_footprint</robotBaseFrame>
+      <odometryRate>50.0</odometryRate>
+      <cmdTimeout>0.5</cmdTimeout>
+    </plugin>
+  </gazebo>
+</robot>

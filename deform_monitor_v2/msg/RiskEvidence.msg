@@ -1,0 +1,15 @@
+int32 id
+uint8 anchor_type
+uint8 obs_state
+uint8 mode
+geometry_msgs/Point position
+geometry_msgs/Vector3 displacement
+float64 displacement_score
+float64 disappearance_score
+float64 graph_score
+float64 confidence
+float64 risk_score
+int32 graph_neighbor_count
+bool observable
+bool comparable
+bool active

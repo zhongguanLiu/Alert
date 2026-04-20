@@ -1,0 +1,336 @@
+# ============================================================================
+
+# ============================================================================
+
+#
+
+
+
+
+#
+
+
+#
+
+
+
+#
+
+
+#
+
+
+#
+
+
+# ============================================================================
+
+io:
+  cloud_topic: /cloud_registered
+  covariance_topic: /lio_odom_cov
+  reset_reference_topic: /deform/reset_reference
+  reference_frame: camera_init
+  cloud_already_in_reference_frame: true
+  odom_cov_layout: fastlio_rot_pos
+  default_rot_sigma: 0.03
+  default_pos_sigma: 0.015
+
+deform_monitor:
+  reference:
+    init_frames: 30
+    tau_ref_quality: 0.55
+    tau_cmp_ref: 0.5
+    tau_ref_stable: 3.0
+    N_ref_stable: 20
+    tau_mu0: 0.85
+
+
+  covariance:
+    alpha_xi: 6.0
+    sigma_p: 0.006
+
+  observation:
+    tau_n_deg: 22.0
+    tau_v_deg: 18.0
+    tau_r_ratio: 0.20
+    tau_cmp: 0.88
+    current_voxel_size: 0.05
+    tau_reacquire: 0.88
+    reacquire_radius: 0.12
+    max_reacquire_candidates: 8
+    min_support_scalar: 6
+    tau_nis_scalar: 8.0
+
+  temporal:
+    enable: true
+    window_frames: 5
+    min_frames: 5
+    step_frames: 5
+    max_window_sec: 0.60
+    pose_corr_inflation: 1.5
+    sigma_motion_per_sec: 0.012     # 0.010 → 0.012
+    use_stable_voxel_fusion: true
+    min_fused_visible_frames: 3
+    min_fused_points_per_voxel: 4
+
+  background_bias:
+    enable: true
+    min_anchor_count: 16
+    min_scalar_count: 36
+    min_support_points: 6           # 5 → 6
+    min_cmp_score: 0.88
+    max_anchor_disp: 0.020
+    ridge_lambda: 1.0e-5
+    huber_delta: 0.006
+    max_bias_norm: 0.04
+    adaptive_disp_step1: 0.04       # 0.05 → 0.04
+    adaptive_disp_step2: 0.06       # 0.08 → 0.06
+    ema_alpha: 0.30
+    min_stable_ratio: 0.50
+
+  local_contrast:
+    enable: true
+    radius: 0.30
+    min_neighbors: 4
+    enable_plane_background_for_edges: true
+    min_plane_neighbors: 3          # 2 → 3
+    min_support_points: 6           # 5 → 6
+    min_cmp_score: 0.86             # 0.84 → 0.86
+    tau_bg_normal_deg: 30.0
+    max_background_disp: 0.025
+    min_background_sigma: 0.005     # 0.004 → 0.005
+    tau_rel_norm: 0.018
+    tau_rel_normal: 0.010           # 0.006 → 0.010
+    tau_rel_edge: 0.012             # 0.008 → 0.012
+    tau_contrast_score: 5.0
+    tau_plane_contrast_score: 3.5   # 2.5 → 3.5
+
+  graph_temporal:
+    enable: true
+    spatial_hash_size: 0.05
+    radius: 0.16
+    min_neighbors: 2
+    tau_normal_deg: 35.0
+    tau_disp_cos: 0.60
+    tau_coherent_diff: 0.010
+    tau_temporal_change: 0.005      # 0.006 → 0.005
+    min_anchor_disp: 0.050
+    ema_alpha: 0.40
+    cusum_k: 0.04                   # 0.03 → 0.04
+    cusum_h: 2.00                   # 1.50 → 2.00
+    tau_graph_support: 0.85
+    tau_graph_temporal: 0.90
+
+  anchor:
+    I_min: 16.0
+    beta_edge: 1.0
+    beta_depth: 1.0
+    beta_normal: 0.5
+    beta_view: 0.5
+    voxel_size: 0.05
+    min_visible_frames: 12
+    min_points_per_voxel: 4         # 3 → 4
+    neighborhood_layers: 1
+    seed_voxel: 0.025
+    radius_min: 0.020               # 0.018 → 0.020
+    min_support_points: 6           # 5 → 6
+    edge_ref_bonus: 0.06
+    band_ref_bonus: 0.04
+
+
+  noise:
+    sigma_pi0: 0.005
+    sigma_edge0: 0.010
+    sigma_rad0: 0.006
+    sigma_bc0: 0.010
+    kappa_r: 0.30
+    kappa_v: 0.03
+
+  observability:
+    tau_lambda: 2500.0
+    tau_sigma_max: 0.05
+
+
+  imm:
+    enable_model_competition: true
+    enable_type_constraint: true
+    rho: 0.85
+    p00: 0.98
+    p01: 0.02
+    p10: 0.08
+    p11: 0.92
+    q_u0: 5.0e-8
+    q_v0: 5.0e-7
+    q_u1: 6.0e-7
+    q_v1: 4.0e-6                    # 9e-6 → 4e-6
+
+
+  significance:
+    enable_cusum: true
+    alpha_s: 0.01
+    tau_A_norm: 0.050
+    tau_A_normal: 0.040
+    tau_A_edge: 0.035
+    tau_disappear: 0.90             # 0.88 → 0.90
+    disappear_frames: 8             # 6 → 8
+    cusum_k: 4.0
+    cusum_h: 25.0
+
+
+  directional_motion:
+    enable: true
+    lambda0: 0.80
+    tau_s: 0.050
+    tau_c: 0.65
+    tau_d: 5.0
+    epsilon: 1.0e-4
+
+  ablation:
+    variant: full_pipeline
+    disable_covariance_inflation: false
+    disable_type_constraint: false
+    single_model_ekf: false
+    disable_cusum: false
+    disable_directional_accumulation: false
+    disable_drift_compensation: false
+
+  cluster:
+    spatial_hash_size: 0.05
+    tau_d: 0.25
+    tau_ng_deg: 30.0
+    tau_u_cos: 0.50
+    tau_corr: 0.40
+    enable_compact_motion: true
+    compact_tau_d: 0.14             # 0.16 → 0.14
+    compact_tau_ng_deg: 55.0        # 65 → 55
+    compact_tau_u_cos: 0.65         # 0.60 → 0.65
+    compact_tau_corr: 0.20          # 0.15 → 0.20
+    compact_seed_disp: 0.020
+    compact_seed_chi2: 20.0         # 15 → 20
+    compact_min_cluster_size: 5     # 4 → 5
+    compact_tau_cluster_disp: 0.025 # 0.015 → 0.025
+    compact_tau_cluster_chi2: 50.0  # 40 → 50
+    compact_max_bbox_diag: 0.40     # 0.45 → 0.40
+    beta_dir: 0.35
+    beta_mag: 0.20
+    beta_dist: 0.20
+    beta_time: 0.25
+    sigma_m: 0.01
+    sigma_d: 0.15
+    tau_edge_score: 0.75
+    min_cluster_size: 5
+    min_cluster_size_disappear: 3   # 2 → 3
+    tau_cluster_disp: 0.015
+    tau_cluster_chi2: 12.0
+    tau_cluster_disappear: 0.78     # 0.72 → 0.78
+
+  structure_correspondence:
+    enable: true
+    publish_motions: true
+    publish_markers: true
+    old_min_anchor_count: 3         # 2 → 3
+    new_min_anchor_count: 3         # 2 → 3
+    max_match_distance: 0.50        # 0.60 → 0.50
+    max_size_gap: 0.30              # 0.35 → 0.30
+    max_normal_deg: 40.0            # 45 → 40
+    max_type_l1: 1.10               # 1.20 → 1.10
+    max_match_cost: 1.10            # 1.20 → 1.10
+    min_confidence: 0.30            # 0.25 → 0.30
+    min_motion_distance: 0.025      # 0.02 → 0.025
+    weight_dist: 0.35
+    weight_size: 0.15
+    weight_normal: 0.15
+    weight_type: 0.10
+    weight_motion: 0.15
+    weight_persistence: 0.10
+    old_score_threshold: 0.60       # 0.55 → 0.60
+    new_disp_threshold: 0.015       # 0.01 → 0.015
+    marker_arrow_scale: 0.018
+    marker_outline_width: 0.012
+    marker_old_alpha: 0.85
+    marker_new_alpha: 0.85
+    marker_arrow_alpha: 0.95
+
+  incremental:
+    enable: true
+    coverage_radius: 0.10
+    warmup_frames: 10
+    min_visible_frames: 5
+    max_new_anchors: 300            # 500 → 300
+
+  visualization:
+    show_all_anchors: false
+    show_comparable_anchors: false
+    show_cluster_boxes: false
+    show_cluster_text: false
+    text_only_significant: true
+    arrows_only_clustered_or_reacquired: true
+    min_arrow_disp: 0.035
+    min_arrow_contrast_score: 6.0
+    max_arrow_disp: 0.20
+    arrow_disp_scale: 8.0
+    arrow_shaft_diameter: 0.020
+    arrow_head_diameter: 0.038
+    arrow_head_length: 0.050
+    cluster_box_alpha: 0.30
+    cluster_outline_alpha: 0.95
+    cluster_outline_width: 0.018
+    cluster_min_box_size: 0.06
+
+  risk_visualization:
+    enable: false
+    publish_evidence: true
+    publish_voxels: true
+    publish_regions: true
+    publish_markers: true
+    voxel_size: 0.05
+    kernel_sigma: 0.08
+    kernel_radius: 0.12
+    min_confidence: 0.40            # 0.35 → 0.40
+    min_graph_neighbors: 2
+    min_risk_score: 0.40            # 0.35 → 0.40
+    min_voxel_risk: 0.30            # 0.25 → 0.30
+    min_region_voxels: 5            # 4 → 5
+    min_region_mean_risk: 0.45      # 0.40 → 0.45
+    low_risk_alpha: 0.12
+    high_risk_alpha: 0.85
+    region_outline_alpha: 0.95
+    region_outline_width: 0.018
+
+  persistent_risk:
+    enable: true
+    max_center_distance: 0.35
+    min_bbox_iou: 0.02
+    max_risk_gap: 0.35
+    ema_alpha: 0.45
+    window_size: 5
+    min_hits_to_confirm: 3
+    min_hit_streak_to_confirm: 2
+    min_confirmed_mean_risk: 0.55
+    min_confirmed_confidence: 0.50
+    min_confirmed_support_mass: 2.5
+    min_confirmed_span: 0.10
+    miss_frames_to_fading: 2
+    miss_frames_to_delete: 4
+    fading_risk_floor: 0.40
+    allow_sparse_planar_regions: true
+
+structure_unit:
+  region_spatial_hash: 0.10
+  region_radius: 0.20
+  region_normal_deg: 40.0           # 45 → 40
+  region_edge_dir_deg: 25.0         # 30 → 25
+  region_min_members: 4             # 3 → 4
+
+structure_tracker:
+  tau_exit: 0.55                    # 0.5 → 0.55
+  search_margin: 0.5
+  orphan_radius: 0.08
+  orphan_voxel_size: 0.05
+  max_size_gap: 0.35                # 0.40 → 0.35
+  max_normal_deg: 40.0              # 45 → 40
+  min_migration_dist: 0.03          # 0.02 → 0.03
+  max_migration_dist: 1.0
+  min_migration_confidence: 0.55    # 0.5 → 0.55
+  orphan_min_points: 6              # 5 → 6
+  persistence_confidence: 0.80      # 0.75 → 0.80

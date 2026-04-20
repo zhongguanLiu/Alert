@@ -1,0 +1,10 @@
+<launch> 
+  <arg name="cloud_topic" default="/cloud_registered" /> 
+  <arg name="covariance_topic" default="/lio_odom_cov" /> 
+
+  <node pkg="deform_monitor_v2" type="deform_monitor_v2_node" name="deform_monitor_v2" output="screen"> 
+    <rosparam command="load" file="$(find deform_monitor_v2)/config/deform_monitor_v2.yaml" /> 
+    <param name="io/cloud_topic" value="$(arg cloud_topic)" /> 
+    <param name="io/covariance_topic" value="$(arg covariance_topic)" /> 
+  </node> 
+</launch> 

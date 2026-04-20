@@ -1,0 +1,12 @@
+int32 id
+int32[] anchor_ids
+geometry_msgs/Point center
+geometry_msgs/Point bbox_min
+geometry_msgs/Point bbox_max
+float64[3] disp_mean
+float64[9] disp_cov
+float64 chi2_stat
+float64 disp_norm
+float64 confidence
+int32 support_count
+bool significant

@@ -1,0 +1,13 @@
+.pytest_cache/
+.codex
+.vscode/
+log/
+CMakeLists.txt
+
+__pycache__/
+*.pyc
+*.pyo
+
+livox_ros_driver/Livox-SDK/build/
+gazebo_test/Mid360_simulation_plugin/livox_laser_simulation/scan_mode/
+gazebo_test/Mid360_simulation_plugin/livox_laser_simulation/meshes/

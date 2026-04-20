@@ -1,0 +1,7 @@
+geometry_msgs/Point center
+float64 risk_score
+float64 confidence
+float64 displacement_component
+float64 disappearance_component
+int32 source_count
+bool significant

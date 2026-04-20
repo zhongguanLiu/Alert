@@ -1,0 +1,29 @@
+<launch> 
+  <arg name="cloud_topic"     default="/cloud_registered" />
+  <arg name="covariance_topic" default="/lio_odom_cov" />
+  <arg name="deform_monitor_config"
+       default="$(find deform_monitor_v2)/config/deform_monitor_v2_real.yaml" />
+  <arg name="enable_real_experiment_recorder" default="true" />
+  <arg name="real_experiment_output_root"
+       default="$(env HOME)/.ros/alert/real_output" />
+
+  
+  <node pkg="deform_monitor_v2" type="deform_monitor_v2_node"
+        name="deform_monitor_v2" output="screen">
+    <rosparam command="load" file="$(arg deform_monitor_config)" />
+    <param name="io/cloud_topic"      value="$(arg cloud_topic)" />
+    <param name="io/covariance_topic" value="$(arg covariance_topic)" />
+  </node>
+
+  
+  
+  
+  
+  <node if="$(arg enable_real_experiment_recorder)"
+        pkg="deform_monitor_v2" type="real_experiment_recorder.py"
+        name="real_experiment_recorder" output="screen">
+    <param name="output_root"                value="$(arg real_experiment_output_root)" />
+    <param name="deform_monitor_param_root"  value="/deform_monitor_v2" />
+    <param name="deform_monitor_config_path" value="$(arg deform_monitor_config)" />
+  </node>
+</launch>

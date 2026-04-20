@@ -1,0 +1,69 @@
+<launch> 
+   
+  <arg name="cloud_topic" default="/cloud_registered" /> 
+  <arg name="covariance_topic" default="/lio_odom_cov" /> 
+  <arg name="clusters_topic" default="/deform/clusters" /> 
+  <arg name="deform_monitor_config" default="$(find deform_monitor_v2)/config/deform_monitor_v2_sim.yaml" /> 
+  <arg name="ablation_variant" default="full_pipeline" /> 
+  <arg name="disable_covariance_inflation" default="false" /> 
+  <arg name="disable_type_constraint" default="false" /> 
+  <arg name="single_model_ekf" default="false" /> 
+  <arg name="disable_cusum" default="false" /> 
+  <arg name="disable_directional_accumulation" default="false" /> 
+  <arg name="disable_drift_compensation" default="false" /> 
+  <arg name="enable_sim_experiment_recorder" default="true" /> 
+  <arg name="enable_sim_truth_rviz_bridge" default="true" /> 
+  <arg name="sim_experiment_recorder_config" default="$(find deform_monitor_v2)/config/sim_experiment_recorder.yaml" /> 
+  <arg name="sim_experiment_output_root" default="$(env HOME)/.ros/alert/output" /> 
+  <arg name="scenario_id" default="" /> 
+  <arg name="controlled_object" default="" /> 
+  <arg name="command_frame" default="" /> 
+  <arg name="linear_velocity_x" default="0.0" /> 
+  <arg name="linear_velocity_y" default="0.0" /> 
+  <arg name="linear_velocity_z" default="0.0" /> 
+  <arg name="angular_velocity_x_deg" default="0.0" /> 
+  <arg name="angular_velocity_y_deg" default="0.0" /> 
+  <arg name="angular_velocity_z_deg" default="0.0" /> 
+  <arg name="control_axis_x" default="0.0" /> 
+  <arg name="control_axis_y" default="0.0" /> 
+  <arg name="control_axis_z" default="0.0" /> 
+  <arg name="control_start_delay_sec" default="" /> 
+  <arg name="control_duration_sec" default="" /> 
+
+  <node pkg="deform_monitor_v2" type="deform_monitor_v2_node" name="deform_monitor_v2" output="screen"> 
+    <rosparam command="load" file="$(arg deform_monitor_config)" /> 
+    <param name="io/cloud_topic" value="$(arg cloud_topic)" /> 
+    <param name="io/covariance_topic" value="$(arg covariance_topic)" /> 
+    <param name="deform_monitor/ablation/variant" value="$(arg ablation_variant)" /> 
+    <param name="deform_monitor/ablation/disable_covariance_inflation" value="$(arg disable_covariance_inflation)" /> 
+    <param name="deform_monitor/ablation/disable_type_constraint" value="$(arg disable_type_constraint)" /> 
+    <param name="deform_monitor/ablation/single_model_ekf" value="$(arg single_model_ekf)" /> 
+    <param name="deform_monitor/ablation/disable_cusum" value="$(arg disable_cusum)" /> 
+    <param name="deform_monitor/ablation/disable_directional_accumulation" value="$(arg disable_directional_accumulation)" /> 
+    <param name="deform_monitor/ablation/disable_drift_compensation" value="$(arg disable_drift_compensation)" /> 
+  </node> 
+
+  <node if="$(arg enable_sim_experiment_recorder)" pkg="deform_monitor_v2" type="sim_experiment_recorder.py" name="sim_experiment_recorder" output="screen"> 
+    <rosparam command="load" file="$(arg sim_experiment_recorder_config)" /> 
+    <param name="output_root" value="$(arg sim_experiment_output_root)" /> 
+    <param name="deform_monitor_param_root" value="/deform_monitor_v2" /> 
+    <param name="deform_monitor_config_path" value="$(arg deform_monitor_config)" /> 
+    <param name="clusters_topic" value="$(arg clusters_topic)" /> 
+    <param name="scenario_id" value="$(arg scenario_id)" /> 
+    <param name="controlled_object" value="$(arg controlled_object)" /> 
+    <param name="command_frame" value="$(arg command_frame)" /> 
+    <param name="linear_velocity_x" value="$(arg linear_velocity_x)" /> 
+    <param name="linear_velocity_y" value="$(arg linear_velocity_y)" /> 
+    <param name="linear_velocity_z" value="$(arg linear_velocity_z)" /> 
+    <param name="angular_velocity_x_deg" value="$(arg angular_velocity_x_deg)" /> 
+    <param name="angular_velocity_y_deg" value="$(arg angular_velocity_y_deg)" /> 
+    <param name="angular_velocity_z_deg" value="$(arg angular_velocity_z_deg)" /> 
+    <param name="control_axis_x" value="$(arg control_axis_x)" /> 
+    <param name="control_axis_y" value="$(arg control_axis_y)" /> 
+    <param name="control_axis_z" value="$(arg control_axis_z)" /> 
+    <param name="control_start_delay_sec" value="$(arg control_start_delay_sec)" /> 
+    <param name="control_duration_sec" value="$(arg control_duration_sec)" /> 
+  </node> 
+
+  <node if="$(arg enable_sim_truth_rviz_bridge)" pkg="deform_monitor_v2" type="sim_truth_rviz_bridge.py" name="sim_truth_rviz_bridge" output="screen" /> 
+</launch> 

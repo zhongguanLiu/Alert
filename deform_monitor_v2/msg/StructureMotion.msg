@@ -1,0 +1,17 @@
+int32 id
+int32 old_region_id
+int32 new_region_id
+uint8 motion_type
+geometry_msgs/Point old_center
+geometry_msgs/Point new_center
+geometry_msgs/Point bbox_old_min
+geometry_msgs/Point bbox_old_max
+geometry_msgs/Point bbox_new_min
+geometry_msgs/Point bbox_new_max
+geometry_msgs/Vector3 motion
+float64 distance
+float64 match_cost
+float64 confidence
+int32 support_old
+int32 support_new
+bool significant

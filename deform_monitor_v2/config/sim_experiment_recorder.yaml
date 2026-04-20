@@ -1,0 +1,35 @@
+output_root: ~/.ros/alert/output
+truth_frame: world
+algorithm_frame: camera_init
+ego_model_name: mid360_fastlio
+model_states_topic: /gazebo/model_states
+link_states_topic: /gazebo/link_states
+risk_evidence_topic: /deform/risk_evidence
+risk_regions_topic: /deform/risk_regions
+persistent_risk_regions_topic: /deform/persistent_risk_regions
+structure_motions_topic: /deform/structure_motions
+ground_truth_odometry_topic: /ground_truth/odom
+clusters_topic: /deform/clusters
+odometry_topic: /Odometry
+sensor_frame_name: livox
+sensor_scoped_link_name: ""
+gt_tum_filename: gt_sensor_world_tum.txt
+odom_tum_filename: odom_raw_tum.txt
+deform_monitor_param_root: /deform_monitor_v2
+deform_monitor_config_path: ""
+# Single-object fallback metadata only.
+# Motion-controller auto-discovery takes precedence whenever it succeeds.
+scenario_id: ""
+controlled_object: ""
+command_frame: ""
+linear_velocity_x: 0.0
+linear_velocity_y: 0.0
+linear_velocity_z: 0.0
+angular_velocity_x_deg: 0.0
+angular_velocity_y_deg: 0.0
+angular_velocity_z_deg: 0.0
+control_axis_x: 0.0
+control_axis_y: 0.0
+control_axis_z: 0.0
+control_start_delay_sec: ""
+control_duration_sec: ""

@@ -1,0 +1,10 @@
+int32 id
+uint8 region_type
+geometry_msgs/Point center
+geometry_msgs/Point bbox_min
+geometry_msgs/Point bbox_max
+float64 mean_risk
+float64 peak_risk
+float64 confidence
+int32 voxel_count
+bool significant

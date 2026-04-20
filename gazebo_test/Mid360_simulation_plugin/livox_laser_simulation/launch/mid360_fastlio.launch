@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<launch>
+  <env name="GAZEBO_MODEL_PATH" value="$(find livox_laser_simulation)/models:$(optenv GAZEBO_MODEL_PATH)" />
+  <arg name="world" default="$(find livox_laser_simulation)/worlds/tracked_mid360_fastlio_collapse_microdeform.world" />
+  <arg name="model" default="$(find livox_laser_simulation)/urdf/mid360_fastlio.urdf.xacro" />
+  <arg name="gui" default="true" />
+  <arg name="rviz" default="false" />
+  <arg name="auto_drive" default="false" />
+  <arg name="keyboard_teleop" default="true" />
+  <arg name="keyboard_linear_speed" default="0.3" />
+  <arg name="keyboard_angular_speed" default="0.3" />
+  <arg name="x" default="0.2411761727221079" />
+  <arg name="y" default="5.0452726702409443" />
+  <arg name="z" default="-0.000044917582417425272" />
+  <arg name="yaw" default="-3.058666733186" />
+  <arg name="paused" default="false" />
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(arg world)" />
+    <arg name="paused" value="$(arg paused)" />
+    <arg name="use_sim_time" value="true" />
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="headless" value="$(eval not arg('gui'))" />
+    <arg name="debug" value="false" />
+    <arg name="verbose" value="false" />
+  </include>
+
+  
+  
+  <param name="gazebo/publish_period" value="0.1" />
+
+  <param name="robot_description" command="$(find xacro)/xacro '$(arg model)'" />
+
+  <node
+    name="robot_state_publisher"
+    pkg="robot_state_publisher"
+    type="robot_state_publisher"
+    output="screen" />
+
+  <node
+    name="spawn_mid360_fastlio"
+    pkg="livox_laser_simulation"
+    type="spawn_or_replace_model.py"
+    respawn="false"
+    output="screen">
+    <param name="model_name" value="mid360_fastlio" />
+    <param name="model_param" value="robot_description" />
+    <param name="robot_namespace" value="/" />
+    <param name="reference_frame" value="world" />
+    <param name="x" value="$(arg x)" />
+    <param name="y" value="$(arg y)" />
+    <param name="z" value="$(arg z)" />
+    <param name="yaw" value="$(arg yaw)" />
+  </node>
+
+  <node
+    if="$(arg auto_drive)"
+    name="mid360_auto_drive"
+    pkg="livox_laser_simulation"
+    type="circle_cmd.py"
+    output="screen">
+    <param name="linear_speed" value="0.3" />
+    <param name="angular_speed" value="0.093" />
+    <param name="publish_rate" value="20.0" />
+    <param name="start_delay" value="8.0" />
+  </node>
+
+  <node
+    if="$(eval arg('keyboard_teleop') and not arg('auto_drive'))"
+    name="mid360_keyboard_drive"
+    pkg="livox_laser_simulation"
+    type="keyboard_cmd.py"
+    output="screen"
+    respawn="false"
+    launch-prefix="gnome-terminal --wait --title=mid360_keyboard_teleop --">
+    <param name="linear_speed" value="$(arg keyboard_linear_speed)" />
+    <param name="angular_speed" value="$(arg keyboard_angular_speed)" />
+    <param name="publish_rate" value="20.0" />
+  </node>
+
+  
+</launch>

@@ -1,0 +1,24 @@
+uint8 STATE_CANDIDATE=0
+uint8 STATE_CONFIRMED=1
+uint8 STATE_FADING=2
+uint8 REGION_NONE=0
+uint8 REGION_DISPLACEMENT_LIKE=1
+uint8 REGION_DISAPPEARANCE_LIKE=2
+uint8 REGION_MIXED=3
+
+int32 track_id
+uint8 state
+uint8 region_type
+geometry_msgs/Point center
+geometry_msgs/Point bbox_min
+geometry_msgs/Point bbox_max
+float32 mean_risk
+float32 peak_risk
+float32 confidence
+float32 accumulated_risk
+float32 support_mass
+float32 spatial_span
+int32 hit_streak
+int32 miss_streak
+int32 age_frames
+bool confirmed

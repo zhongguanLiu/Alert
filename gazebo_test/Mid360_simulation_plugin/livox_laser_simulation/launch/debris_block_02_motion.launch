@@ -1,0 +1,117 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="control_mode" default="single" />
+  <arg name="node_name" default="obstacle_block_left_clone_clone_motion" />
+  <arg name="model_name" default="obstacle_block_left_clone_clone" />
+  <arg name="command_frame" default="body" />
+  <arg name="model_01_node_name" default="model_01_motion" />
+  <arg name="model_02_node_name" default="model_02_motion" />
+  <arg name="model_01_name" default="model_01" />
+  <arg name="model_02_name" default="model_02" />
+  <arg name="model_01_command_frame" default="world" />
+  <arg name="model_02_command_frame" default="world" />
+  <arg name="control_rate" default="50.0" />
+  <arg name="command_timeout" default="0.0" />
+  <arg name="start_delay" default="0.0" />
+  <arg name="duration" default="0.0" />
+  <arg name="enable_work_patrol" default="false" />
+  <arg name="work_patrol_mode" default="x_oscillate_with_yaw" />
+  <arg name="work_patrol_radius" default="1.0" />
+  <arg name="work_patrol_linear_speed" default="0.3" />
+  <arg name="work_patrol_start_delay" default="0.0" />
+  <arg name="work_patrol_segment_duration" default="10.0" />
+  <arg name="work_patrol_yaw_amplitude" default="0.10" />
+  <arg name="work_patrol_yaw_period" default="20.0" />
+  <arg name="scenario_id" default="" />
+  <arg name="motion_start_sim_time" default="-1.0" />
+  <arg name="linear_x" default="0.0" />
+  <arg name="linear_y" default="0.0" />
+  <arg name="linear_z" default="0.0" />
+  <arg name="angular_x_deg" default="0.0" />
+  <arg name="angular_y_deg" default="0.0" />
+  <arg name="angular_z_deg" default="0.0" />
+  <arg name="model_01_linear_y" default="$(arg linear_y)" />
+  <arg name="model_02_linear_x" default="$(arg linear_y)" />
+
+  <node
+    if="$(eval arg('control_mode') == 'single')"
+    name="$(arg node_name)"
+    pkg="livox_laser_simulation"
+    type="model_motion_controller.py"
+    output="screen">
+    <param name="model_name" value="$(arg model_name)" />
+    <param name="command_frame" value="$(arg command_frame)" />
+    <param name="control_rate" value="$(arg control_rate)" />
+    <param name="command_timeout" value="$(arg command_timeout)" />
+    <param name="start_delay" value="$(arg start_delay)" />
+    <param name="duration" value="$(arg duration)" />
+    <param name="scenario_id" value="$(arg scenario_id)" />
+    <param name="motion_start_sim_time" value="$(arg motion_start_sim_time)" />
+    <param name="linear_x" value="$(arg linear_x)" />
+    <param name="linear_y" value="$(arg linear_y)" />
+    <param name="linear_z" value="$(arg linear_z)" />
+    <param name="angular_x_deg" value="$(arg angular_x_deg)" />
+    <param name="angular_y_deg" value="$(arg angular_y_deg)" />
+    <param name="angular_z_deg" value="$(arg angular_z_deg)" />
+  </node>
+
+  <node
+    if="$(eval arg('control_mode') == 'multi')"
+    name="$(arg model_01_node_name)"
+    pkg="livox_laser_simulation"
+    type="model_motion_controller.py"
+    output="screen">
+    <param name="model_name" value="$(arg model_01_name)" />
+    <param name="command_frame" value="$(arg model_01_command_frame)" />
+    <param name="control_rate" value="$(arg control_rate)" />
+    <param name="command_timeout" value="$(arg command_timeout)" />
+    <param name="start_delay" value="$(arg start_delay)" />
+    <param name="duration" value="$(arg duration)" />
+    <param name="scenario_id" value="$(arg scenario_id)" />
+    <param name="motion_start_sim_time" value="$(arg motion_start_sim_time)" />
+    <param name="linear_x" value="0.0" />
+    <param name="linear_y" value="$(arg model_01_linear_y)" />
+    <param name="linear_z" value="0.0" />
+    <param name="angular_x_deg" value="0.0" />
+    <param name="angular_y_deg" value="0.0" />
+    <param name="angular_z_deg" value="0.0" />
+  </node>
+
+  <node
+    if="$(eval arg('control_mode') == 'multi')"
+    name="$(arg model_02_node_name)"
+    pkg="livox_laser_simulation"
+    type="model_motion_controller.py"
+    output="screen">
+    <param name="model_name" value="$(arg model_02_name)" />
+    <param name="command_frame" value="$(arg model_02_command_frame)" />
+    <param name="control_rate" value="$(arg control_rate)" />
+    <param name="command_timeout" value="$(arg command_timeout)" />
+    <param name="start_delay" value="$(arg start_delay)" />
+    <param name="duration" value="$(arg duration)" />
+    <param name="scenario_id" value="$(arg scenario_id)" />
+    <param name="motion_start_sim_time" value="$(arg motion_start_sim_time)" />
+    <param name="linear_x" value="$(arg model_02_linear_x)" />
+    <param name="linear_y" value="0.0" />
+    <param name="linear_z" value="0.0" />
+    <param name="angular_x_deg" value="0.0" />
+    <param name="angular_y_deg" value="0.0" />
+    <param name="angular_z_deg" value="0.0" />
+  </node>
+
+  <node
+    if="$(arg enable_work_patrol)"
+    name="mid360_work_patrol"
+    pkg="livox_laser_simulation"
+    type="work_patrol_cmd.py"
+    output="screen">
+    <param name="patrol_mode" value="$(arg work_patrol_mode)" />
+    <param name="linear_speed" value="$(arg work_patrol_linear_speed)" />
+    <param name="radius" value="$(arg work_patrol_radius)" />
+    <param name="publish_rate" value="20.0" />
+    <param name="start_delay" value="$(arg work_patrol_start_delay)" />
+    <param name="segment_duration" value="$(arg work_patrol_segment_duration)" />
+    <param name="yaw_amplitude" value="$(arg work_patrol_yaw_amplitude)" />
+    <param name="yaw_period" value="$(arg work_patrol_yaw_period)" />
+  </node>
+</launch>
