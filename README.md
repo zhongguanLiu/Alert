@@ -19,13 +19,13 @@
 ## Demo Video
 
 <p align="center">
-  <a href="docs/assets/tanta_anchor4.mp4">
+  <a href="https://zhongguanliu.github.io/Alert/demo_video.html">
     <img src="docs/assets/real_dog.jpg" alt="ALERT demo video" width="760">
   </a>
 </p>
 
 <p align="center">
-  Click the cover image to open the demo video.
+  Click the cover image to open the demo video page.
 </p>
 
 This video shows a typical collapse scene in a confined space. In this run, two severe collapse events occur one after another, which makes it a representative example for demonstrating the ALERT system.

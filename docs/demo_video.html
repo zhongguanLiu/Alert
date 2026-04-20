@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ALERT Demo Video</title>
+  <style>
+    :root {
+      --bg: #0f1720;
+      --panel: #172230;
+      --text: #ecf2f8;
+      --muted: #a9bbca;
+      --accent: #de3c31;
+      --line: #294055;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Georgia", "Times New Roman", serif;
+      background:
+        radial-gradient(circle at top left, rgba(222, 60, 49, 0.18), transparent 26%),
+        linear-gradient(180deg, #0e1620 0%, #111c28 52%, #0b131b 100%);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 48px 24px 56px;
+    }
+
+    .hero {
+      margin-bottom: 28px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(23, 34, 48, 0.86);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+      overflow: hidden;
+    }
+
+    .hero-copy {
+      padding: 28px 28px 18px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: 14px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(28px, 5vw, 44px);
+      line-height: 1.05;
+      font-style: italic;
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 850px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.7;
+    }
+
+    .player {
+      padding: 0 28px 28px;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #000;
+    }
+
+    .notes {
+      margin-top: 20px;
+      padding: 20px 22px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(10, 17, 24, 0.78);
+    }
+
+    .notes p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.8;
+    }
+
+    .links {
+      margin-top: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .links a {
+      display: inline-block;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--text);
+      text-decoration: none;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .links a:hover {
+      border-color: var(--accent);
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">ALERT Demo</p>
+        <h1>Confined-Space Collapse Sequence</h1>
+        <p class="lead">
+          This video shows a typical collapse scene in a confined space. In this run,
+          two severe collapse events occur one after another, which makes it a
+          representative example for demonstrating the ALERT system.
+        </p>
+      </div>
+      <div class="player">
+        <video controls playsinline preload="metadata" poster="assets/real_dog.jpg">
+          <source src="assets/tanta_anchor4.mp4" type="video/mp4">
+          Your browser does not support embedded video playback.
+        </video>
+        <div class="notes">
+          <p>
+            If the video does not load inside the page, use the direct download link below.
+            The playback page is intended for GitHub Pages deployment from the repository
+            <code>docs/</code> directory.
+          </p>
+          <div class="links">
+            <a href="assets/tanta_anchor4.mp4">Open / Download MP4</a>
+            <a href="../README.md">Back to README</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
