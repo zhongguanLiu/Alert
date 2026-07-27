@@ -4,6 +4,8 @@
   <strong>LiDAR Early Warning of Structural Deformation for Robotic Rescue</strong>
 </p>
 
+The demo video is currently in production and is expected to be uploaded and linked here on August 5, 2026.
+
 ## 1. Overview
 
 Secondary collapse is a major operational hazard in post-disaster rescue, where subtle local structural responses may precede abrupt failure. ALERT is an onboard LiDAR-based perception and warning framework for mobile rescue robots. Instead of using LiDAR only for mapping and localization, ALERT focuses on online structural-risk perception under weak references, platform motion, sparse non-repetitive scanning, and partial observability.
