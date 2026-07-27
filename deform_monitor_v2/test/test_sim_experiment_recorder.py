@@ -1,19 +1,11 @@
-# Author: zgliu@cumt.edu.cn
-# Affiliation: China University of Mining and Technology
-# Open-source release date: 2026-04-20
-"""Unit tests for sim_experiment_recorder.py.
-
-The hard-coded rates, delays, velocities, and IDs in this file are synthetic
-ROS parameter fixtures used to verify manifest writing and recorder behavior.
-They are not ground-truth experiment logs or reported evaluation numbers.
-"""
-
 import importlib.util
+import csv
 import json
 import pathlib
 import xml.etree.ElementTree as ET
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from types import SimpleNamespace
@@ -235,6 +227,1042 @@ def load_module_if_exists():
 
 
 class SimExperimentRecorderHelperTests(unittest.TestCase):
+    def test_normalize_algorithm_storage_backend_accepts_only_declared_modes(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        self.assertEqual(module.normalize_algorithm_storage_backend(" JSONL "), "jsonl")
+        self.assertEqual(
+            module.normalize_algorithm_storage_backend("SQLITE_ZLIB"),
+            "sqlite_zlib",
+        )
+        self.assertEqual(module.normalize_algorithm_storage_backend("dual"), "dual")
+        with self.assertRaises(ValueError):
+            module.normalize_algorithm_storage_backend("sampled")
+
+    def test_sqlite_backend_routes_complete_risk_frame_without_jsonl(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        payload = {
+            "schema_version": 2,
+            "header": {
+                "seq": 5,
+                "frame_id": "camera_init",
+                "stamp": {"secs": 12, "nsecs": 345000000, "sec": 12.345},
+            },
+            "reference_epoch": 2,
+            "recorded_at": {"secs": 12, "nsecs": 400000000, "sec": 12.4},
+            "evidences": [
+                {
+                    "anchor_id": 17,
+                    "active": False,
+                    "significant": True,
+                    "risk_score": 0.25,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as root:
+            recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+            recorder.algorithm_dir = pathlib.Path(root) / "algorithm"
+            recorder.algorithm_dir.mkdir()
+            recorder.algorithm_storage_backend = "sqlite_zlib"
+            recorder._algorithm_files = {}
+            recorder._algorithm_frame_store = module.AsyncCompressedFrameStore(
+                recorder.algorithm_dir / module.ALGORITHM_FRAME_DATABASE_FILENAME
+            )
+            recorder._closed = False
+            recorder.record_flush_max_rows = 100
+            recorder.record_flush_interval_sec = 60.0
+            try:
+                self.assertTrue(
+                    recorder._append_algorithm_payload(
+                        "risk_evidence",
+                        "risk_evidence.jsonl",
+                        payload,
+                    )
+                )
+            finally:
+                recorder._algorithm_frame_store.close()
+            decoded = list(
+                module.iter_sqlite_stream(
+                    recorder.algorithm_dir
+                    / module.ALGORITHM_FRAME_DATABASE_FILENAME,
+                    "risk_evidence",
+                )
+            )
+
+            self.assertFalse((recorder.algorithm_dir / "risk_evidence.jsonl").exists())
+            self.assertEqual(decoded, [payload])
+            self.assertEqual(recorder._stream_stats["risk_evidence"]["row_count"], 1)
+
+    def test_risk_callback_uses_selected_sqlite_backend(self):
+        module = load_module_if_exists()
+        msg = SimpleNamespace(
+            header=SimpleNamespace(
+                seq=8,
+                stamp=SimpleNamespace(secs=20, nsecs=0),
+                frame_id="camera_init",
+            ),
+            reference_epoch=3,
+            evidences=[SimpleNamespace(anchor_id=17, active=False, risk_score=0.2)],
+        )
+        fake_rospy = _FakeRospy(now_sec=20.1)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        try:
+            with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as root:
+                recorder = module.SimExperimentRecorder.__new__(
+                    module.SimExperimentRecorder
+                )
+                recorder.algorithm_dir = pathlib.Path(root) / "algorithm"
+                recorder.algorithm_dir.mkdir()
+                recorder.algorithm_storage_backend = "sqlite_zlib"
+                recorder._algorithm_files = {}
+                recorder._algorithm_frame_store = module.AsyncCompressedFrameStore(
+                    recorder.algorithm_dir
+                    / module.ALGORITHM_FRAME_DATABASE_FILENAME
+                )
+                recorder._closed = False
+                recorder.record_flush_max_rows = 100
+                recorder.record_flush_interval_sec = 60.0
+                try:
+                    recorder._handle_risk_evidence(msg)
+                finally:
+                    recorder._algorithm_frame_store.close()
+
+                decoded = list(
+                    module.iter_sqlite_stream(
+                        recorder.algorithm_dir
+                        / module.ALGORITHM_FRAME_DATABASE_FILENAME,
+                        "risk_evidence",
+                    )
+                )
+                self.assertFalse(
+                    (recorder.algorithm_dir / "risk_evidence.jsonl").exists()
+                )
+                self.assertEqual(decoded[0]["header"]["seq"], 8)
+                self.assertFalse(decoded[0]["evidences"][0]["active"])
+        finally:
+            module.rospy = original_rospy
+
+    def test_recorder_initializes_sqlite_storage_before_subscribing(self):
+        module = load_module_if_exists()
+        fake_rospy = _FakeRospy(
+            params={
+                "~output_root": "",
+                "~algorithm_storage_backend": "sqlite_zlib",
+            }
+        )
+        original_rospy = module.rospy
+        original_tf = module.tf
+        original_model_states = module.ModelStates
+        original_link_states = module.LinkStates
+        recorder = None
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="sim_experiment_recorder_"
+            ) as root:
+                fake_rospy.params["~output_root"] = root
+                module.rospy = fake_rospy
+                module.tf = SimpleNamespace(TransformListener=lambda: object())
+                module.ModelStates = object
+                module.LinkStates = object
+
+                recorder = module.SimExperimentRecorder()
+                run_info = json.loads(
+                    (recorder.meta_dir / "run_info.json").read_text()
+                )
+
+                self.assertEqual(recorder.algorithm_storage_backend, "sqlite_zlib")
+                self.assertIsNotNone(recorder._algorithm_frame_store)
+                self.assertTrue(
+                    (
+                        recorder.algorithm_dir
+                        / module.ALGORITHM_FRAME_DATABASE_FILENAME
+                    ).is_file()
+                )
+                self.assertEqual(
+                    run_info["algorithm_recording"]["schema_version"],
+                    3,
+                )
+                self.assertEqual(
+                    run_info["algorithm_recording"]["storage_backend"],
+                    "sqlite_zlib",
+                )
+                self.assertGreater(len(fake_rospy.subscribers), 0)
+                anchor_subscriber = next(
+                    subscriber
+                    for subscriber in fake_rospy.subscribers
+                    if subscriber.topic == "/deform/anchors"
+                )
+                self.assertEqual(anchor_subscriber.queue_size, 64)
+                model_subscriber = next(
+                    subscriber
+                    for subscriber in fake_rospy.subscribers
+                    if subscriber.topic == "/gazebo/model_states"
+                )
+                link_subscriber = next(
+                    subscriber
+                    for subscriber in fake_rospy.subscribers
+                    if subscriber.topic == "/gazebo/link_states"
+                )
+                self.assertEqual(model_subscriber.queue_size, 64)
+                self.assertEqual(link_subscriber.queue_size, 64)
+                self.assertEqual(
+                    run_info["truth_recording"]["write_mode"],
+                    "asynchronous_batched",
+                )
+                recorder.close()
+                recorder = None
+        finally:
+            if recorder is not None:
+                recorder.close()
+            module.rospy = original_rospy
+            module.tf = original_tf
+            module.ModelStates = original_model_states
+            module.LinkStates = original_link_states
+
+    def test_sqlite_close_trims_only_incomplete_common_frame_suffix(self):
+        module = load_module_if_exists()
+        fake_rospy = _FakeRospy(now_sec=30.0)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="sim_experiment_recorder_"
+            ) as root:
+                recorder = module.SimExperimentRecorder.__new__(
+                    module.SimExperimentRecorder
+                )
+                recorder.algorithm_dir = pathlib.Path(root) / "algorithm"
+                recorder.meta_dir = pathlib.Path(root) / "meta"
+                recorder.algorithm_dir.mkdir()
+                recorder.meta_dir.mkdir()
+                recorder.algorithm_storage_backend = "sqlite_zlib"
+                recorder._algorithm_files = {}
+                recorder._object_files = {}
+                recorder._link_files = {}
+                recorder._algorithm_frame_store = module.AsyncCompressedFrameStore(
+                    recorder.algorithm_dir
+                    / module.ALGORITHM_FRAME_DATABASE_FILENAME
+                )
+                recorder._closed = False
+                recorder.record_flush_max_rows = 100
+                recorder.record_flush_interval_sec = 60.0
+
+                def payload_for(stream_name, stamp):
+                    payload = {
+                        "schema_version": 2,
+                        "header": {
+                            "seq": stamp,
+                            "stamp": {
+                                "secs": stamp,
+                                "nsecs": 0,
+                                "sec": float(stamp),
+                            },
+                        },
+                        "reference_epoch": 1,
+                        "recorded_at": {
+                            "secs": stamp,
+                            "nsecs": 1000000,
+                            "sec": float(stamp) + 0.001,
+                        },
+                    }
+                    if stream_name == "anchor_observations":
+                        payload["anchors"] = []
+                    elif stream_name == "risk_evidence":
+                        payload["evidences"] = []
+                    elif stream_name == "clusters":
+                        payload["clusters"] = []
+                    if stream_name == "object_observation_stats":
+                        payload["phase"] = 1
+                    return payload
+
+                def append(stream_name, stamp):
+                    payload = payload_for(stream_name, stamp)
+                    filename = module.FRAME_COMMIT_STREAM_FILES[stream_name]
+                    if stream_name in module.COMPRESSED_ALGORITHM_STREAMS:
+                        recorder._append_algorithm_payload(
+                            stream_name,
+                            filename,
+                            payload,
+                        )
+                    else:
+                        recorder._append_jsonl(stream_name, filename, payload)
+
+                for stamp in (1, 2):
+                    for stream_name in module.FRAME_COMMIT_STREAM_FILES:
+                        append(stream_name, stamp)
+                for stream_name in module.FRAME_COMMIT_STREAM_FILES:
+                    if stream_name not in (
+                        "processing_stamps",
+                        "anchor_observations",
+                    ):
+                        append(stream_name, 3)
+
+                recorder.close()
+
+                database_path = (
+                    recorder.algorithm_dir
+                    / module.ALGORITHM_FRAME_DATABASE_FILENAME
+                )
+                for stream_name in module.COMPRESSED_ALGORITHM_STREAMS:
+                    with self.subTest(stream_name=stream_name):
+                        decoded = list(
+                            module.iter_sqlite_stream(database_path, stream_name)
+                        )
+                        self.assertEqual(
+                            [record["header"]["stamp"]["sec"] for record in decoded],
+                            [1.0, 2.0],
+                        )
+
+                completion = json.loads(
+                    (recorder.meta_dir / "run_complete.json").read_text()
+                )
+                self.assertEqual(
+                    completion["algorithm_storage"]["integrity_check"],
+                    "ok",
+                )
+                self.assertEqual(
+                    completion["algorithm_storage"]["streams"]["clusters"][
+                        "frame_count"
+                    ],
+                    2,
+                )
+                self.assertEqual(
+                    completion["streams"]["clusters"]["row_count"],
+                    2,
+                )
+        finally:
+            module.rospy = original_rospy
+
+    def test_sqlite_writer_failure_marks_run_incomplete(self):
+        module = load_module_if_exists()
+        fake_rospy = _FakeRospy(now_sec=40.0)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        payload = {
+            "schema_version": 2,
+            "header": {
+                "seq": 1,
+                "stamp": {"secs": 1, "nsecs": 0, "sec": 1.0},
+            },
+            "reference_epoch": 1,
+            "recorded_at": {"secs": 1, "nsecs": 1, "sec": 1.000000001},
+            "clusters": [],
+        }
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="sim_experiment_recorder_"
+            ) as root:
+                recorder = module.SimExperimentRecorder.__new__(
+                    module.SimExperimentRecorder
+                )
+                recorder.algorithm_dir = pathlib.Path(root) / "algorithm"
+                recorder.meta_dir = pathlib.Path(root) / "meta"
+                recorder.algorithm_dir.mkdir()
+                recorder.meta_dir.mkdir()
+                recorder.algorithm_storage_backend = "sqlite_zlib"
+                recorder._algorithm_files = {}
+                recorder._object_files = {}
+                recorder._link_files = {}
+                recorder._algorithm_frame_store = module.AsyncCompressedFrameStore(
+                    recorder.algorithm_dir
+                    / module.ALGORITHM_FRAME_DATABASE_FILENAME
+                )
+                recorder._closed = False
+                recorder.record_flush_max_rows = 100
+                recorder.record_flush_interval_sec = 60.0
+
+                recorder._append_algorithm_payload(
+                    "clusters", "clusters.jsonl", payload
+                )
+                try:
+                    recorder._append_algorithm_payload(
+                        "clusters", "clusters.jsonl", payload
+                    )
+                except module.AlgorithmFrameStoreError:
+                    pass
+                recorder.close()
+
+                completion = json.loads(
+                    (recorder.meta_dir / "run_complete.json").read_text()
+                )
+                self.assertFalse(completion["clean_shutdown"])
+                self.assertFalse(completion["recording_integrity_valid"])
+                self.assertTrue(completion["recording_error"])
+        finally:
+            module.rospy = original_rospy
+
+    def test_dual_backend_writes_both_representations_but_counts_once(self):
+        module = load_module_if_exists()
+        payload = {
+            "schema_version": 2,
+            "header": {
+                "seq": 2,
+                "stamp": {"secs": 2, "nsecs": 0, "sec": 2.0},
+            },
+            "reference_epoch": 1,
+            "recorded_at": {"secs": 2, "nsecs": 1, "sec": 2.000000001},
+            "anchors": [{"id": 7, "significant": False}],
+        }
+        with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as root:
+            recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+            recorder.algorithm_dir = pathlib.Path(root) / "algorithm"
+            recorder.algorithm_dir.mkdir()
+            recorder.algorithm_storage_backend = "dual"
+            recorder._algorithm_files = {}
+            recorder._algorithm_frame_store = module.AsyncCompressedFrameStore(
+                recorder.algorithm_dir / module.ALGORITHM_FRAME_DATABASE_FILENAME
+            )
+            recorder._closed = False
+            recorder.record_flush_max_rows = 100
+            recorder.record_flush_interval_sec = 60.0
+            try:
+                recorder._append_algorithm_payload(
+                    "anchor_observations",
+                    "anchor_observations.jsonl",
+                    payload,
+                )
+                recorder._algorithm_frame_store.close()
+                for handle in recorder._algorithm_files.values():
+                    handle.flush()
+                jsonl_payload = json.loads(
+                    (recorder.algorithm_dir / "anchor_observations.jsonl")
+                    .read_text()
+                    .strip()
+                )
+                sqlite_payload = list(
+                    module.iter_sqlite_stream(
+                        recorder.algorithm_dir
+                        / module.ALGORITHM_FRAME_DATABASE_FILENAME,
+                        "anchor_observations",
+                    )
+                )[0]
+            finally:
+                for handle in recorder._algorithm_files.values():
+                    handle.close()
+
+        self.assertEqual(jsonl_payload, payload)
+        self.assertEqual(sqlite_payload, payload)
+        self.assertEqual(recorder._stream_stats["anchor_observations"]["row_count"], 1)
+
+    @staticmethod
+    def _pose(x=0.0, y=0.0, z=0.0):
+        return SimpleNamespace(
+            position=SimpleNamespace(x=x, y=y, z=z),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        )
+
+    @staticmethod
+    def _twist(lx=0.0, ly=0.0, lz=0.0, ax=0.0, ay=0.0, az=0.0):
+        return SimpleNamespace(
+            linear=SimpleNamespace(x=lx, y=ly, z=lz),
+            angular=SimpleNamespace(x=ax, y=ay, z=az),
+        )
+
+    def test_truth_object_schema_includes_rigid_body_twist(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        self.assertIn("twist_frame_id", module.TRUTH_OBJECT_HEADER)
+        self.assertEqual(
+            module.TRUTH_OBJECT_HEADER[-6:],
+            [
+                "linear_velocity_x",
+                "linear_velocity_y",
+                "linear_velocity_z",
+                "angular_velocity_x",
+                "angular_velocity_y",
+                "angular_velocity_z",
+            ],
+        )
+
+    def test_truth_recording_rate_is_positive_and_configurable(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        self.assertEqual(module.normalize_positive_rate_hz("5.0", 10.0, "rate"), 5.0)
+        self.assertTrue(module.should_sample_stream(1.0, None, 10.0))
+        self.assertFalse(module.should_sample_stream(1.05, 1.0, 10.0))
+        self.assertTrue(module.should_sample_stream(1.10, 1.0, 10.0))
+        self.assertTrue(module.should_sample_stream(0.01, 1.0, 10.0))
+        with self.assertRaises(ValueError):
+            module.normalize_positive_rate_hz(0.0, 10.0, "rate")
+
+        policy = module.normalize_truth_motion_policy(
+            {"translation_deadband_m": 0.002, "sustained_motion_samples": 3}
+        )
+        self.assertEqual(policy["translation_deadband_m"], 0.002)
+        self.assertEqual(policy["sustained_motion_samples"], 3)
+        zero_speed_policy = module.normalize_truth_motion_policy(
+            {"linear_speed_deadband_mps": 0.0,
+             "angular_speed_deadband_degps": 0.0}
+        )
+        self.assertEqual(zero_speed_policy["linear_speed_deadband_mps"], 0.0)
+        self.assertEqual(zero_speed_policy["angular_speed_deadband_degps"], 0.0)
+
+    def test_phase_preserving_sampler_approaches_ten_hz_from_twelve_point_five_hz(self):
+        module = load_module_if_exists()
+        next_sample = None
+        last_observed = None
+        sampled_times = []
+        for index in range(126):
+            stamp = 1.0 + 0.08 * index
+            sampled, next_sample, last_observed = module.advance_sampling_clock(
+                stamp, next_sample, last_observed, 10.0
+            )
+            if sampled:
+                sampled_times.append(stamp)
+
+        effective_rate = (len(sampled_times) - 1) / (
+            sampled_times[-1] - sampled_times[0]
+        )
+        self.assertGreaterEqual(effective_rate, 9.5)
+        self.assertLessEqual(effective_rate, 10.1)
+
+    def test_phase_preserving_sampler_resets_after_clock_rollback(self):
+        module = load_module_if_exists()
+        sampled, next_sample, last_observed = module.advance_sampling_clock(
+            10.0, None, None, 10.0
+        )
+        self.assertTrue(sampled)
+        sampled, next_sample, last_observed = module.advance_sampling_clock(
+            10.05, next_sample, last_observed, 10.0
+        )
+        self.assertFalse(sampled)
+        sampled, next_sample, last_observed = module.advance_sampling_clock(
+            1.0, next_sample, last_observed, 10.0
+        )
+        self.assertTrue(sampled)
+        self.assertAlmostEqual(next_sample, 1.1)
+
+    def test_sampling_statistics_report_configured_and_effective_rates(self):
+        module = load_module_if_exists()
+        stats = module.new_sampling_stats(configured_rate_hz=10.0)
+        module.update_sampling_stats(stats, 1.0, sampled=True, rows_written=2)
+        module.update_sampling_stats(stats, 1.05, sampled=False, rows_written=0)
+        module.update_sampling_stats(stats, 1.1, sampled=True, rows_written=2)
+
+        payload = module.finalize_sampling_stats(stats)
+
+        self.assertEqual(payload["configured_rate_hz"], 10.0)
+        self.assertEqual(payload["received_message_count"], 3)
+        self.assertEqual(payload["sampled_message_count"], 2)
+        self.assertEqual(payload["rows_written"], 4)
+        self.assertAlmostEqual(payload["effective_sample_rate_hz"], 10.0)
+
+    def test_truth_pipeline_reports_callback_gaps_and_lossless_drain(self):
+        module = load_module_if_exists()
+        stats = module.new_truth_pipeline_stats(configured_rate_hz=10.0)
+        module.update_truth_callback_stats(stats, 1.0)
+        module.update_truth_callback_stats(stats, 1.1)
+        module.update_truth_callback_stats(stats, 1.5)
+        stats["enqueued_batch_count"] = 2
+        stats["written_batch_count"] = 2
+        stats["enqueued_row_count"] = 20
+        stats["written_row_count"] = 20
+
+        payload = module.finalize_truth_pipeline_stats(stats)
+
+        self.assertEqual(payload["callback_count"], 3)
+        self.assertAlmostEqual(payload["max_callback_gap_sec"], 0.4)
+        self.assertEqual(payload["estimated_missed_sample_slots"], 3)
+        self.assertTrue(payload["lossless_after_enqueue"])
+
+    def test_async_truth_writer_drains_rows_before_shutdown(self):
+        module = load_module_if_exists()
+        with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as root:
+            recorder = module.SimExperimentRecorder.__new__(
+                module.SimExperimentRecorder
+            )
+            recorder.truth_objects_dir = pathlib.Path(root) / "objects"
+            recorder.truth_links_dir = pathlib.Path(root) / "links"
+            recorder.truth_dir = pathlib.Path(root)
+            recorder.truth_objects_dir.mkdir()
+            recorder.truth_links_dir.mkdir()
+            recorder._object_files = {}
+            recorder._link_files = {}
+            recorder._surface_truth_catalog_handle = None
+            recorder.truth_object_rate_hz = 10.0
+            recorder.truth_link_rate_hz = 10.0
+            recorder.truth_processing_queue_size = 4
+            recorder.truth_processing_enqueue_timeout_sec = 0.5
+            recorder.record_flush_interval_sec = 60.0
+            recorder.record_flush_max_rows = 100
+            recorder._truth_write_queue = None
+            recorder._truth_write_thread = None
+            recorder._truth_write_error = None
+            recorder._start_truth_write_worker()
+
+            row = ["1.000000000", "model_01", "world", "world"] + [0.0] * 13
+            recorder._enqueue_truth_rows("model_states", [("model_01", row)])
+            recorder._close_truth_write_worker()
+
+            rows = list(
+                csv.DictReader(
+                    (recorder.truth_objects_dir / "model_01.csv")
+                    .read_text()
+                    .splitlines()
+                )
+            )
+            stats = module.finalize_truth_pipeline_stats(
+                recorder._truth_pipeline_stats["model_states"]
+            )
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(stats["enqueued_row_count"], 1)
+            self.assertEqual(stats["written_row_count"], 1)
+            self.assertTrue(stats["lossless_after_enqueue"])
+            for handle, _ in recorder._object_files.values():
+                handle.close()
+
+    def test_model_truth_records_ground_plane_and_gazebo_twist(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+            temp_dir = pathlib.Path(temp_dir)
+            fake_rospy = _FakeRospy(now_sec=1.0)
+            original_rospy = module.rospy
+            module.rospy = fake_rospy
+            try:
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.ego_model_name = "mid360_fastlio"
+                recorder.truth_frame = "world"
+                recorder.truth_object_rate_hz = 10.0
+                recorder.truth_objects_dir = temp_dir / "truth" / "objects"
+                recorder.truth_objects_dir.mkdir(parents=True)
+                recorder._object_files = {}
+                recorder._link_files = {}
+                recorder._algorithm_files = {}
+                recorder._last_model_states_write_time = None
+                recorder._latest_model_pose_world = {}
+                recorder._ego_initial_pose_written = False
+                recorder._refresh_scenario_manifest_if_needed = lambda: False
+
+                msg = SimpleNamespace(
+                    name=["ground_plane", "model_01"],
+                    pose=[self._pose(), self._pose(1.0, 2.0, 3.0)],
+                    twist=[self._twist(), self._twist(0.1, -0.2, 0.3, 0.4, -0.5, 0.6)],
+                )
+                recorder._handle_model_states(msg)
+
+                self.assertTrue((recorder.truth_objects_dir / "ground_plane.csv").exists())
+                rows = list(
+                    csv.DictReader(
+                        (recorder.truth_objects_dir / "model_01.csv")
+                        .read_text()
+                        .splitlines()
+                    )
+                )
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["twist_frame_id"], "world")
+                self.assertEqual(float(rows[0]["linear_velocity_x"]), 0.1)
+                self.assertEqual(float(rows[0]["linear_velocity_y"]), -0.2)
+                self.assertEqual(float(rows[0]["angular_velocity_z"]), 0.6)
+                self.assertIn("model_01", recorder._latest_model_pose_world)
+                recorder.close()
+            finally:
+                module.rospy = original_rospy
+
+    def test_model_truth_waits_for_positive_simulation_clock(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+            temp_dir = pathlib.Path(temp_dir)
+            fake_rospy = _FakeRospy(now_sec=0.0)
+            original_rospy = module.rospy
+            module.rospy = fake_rospy
+            try:
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.ego_model_name = "mid360_fastlio"
+                recorder.truth_frame = "world"
+                recorder.truth_object_rate_hz = 10.0
+                recorder.truth_objects_dir = temp_dir / "truth" / "objects"
+                recorder.truth_objects_dir.mkdir(parents=True)
+                recorder._object_files = {}
+                recorder._link_files = {}
+                recorder._algorithm_files = {}
+                recorder._last_model_states_write_time = None
+                recorder._latest_model_pose_world = {}
+                recorder._ego_initial_pose_written = False
+                recorder._refresh_scenario_manifest_if_needed = lambda: False
+
+                msg = SimpleNamespace(
+                    name=["model_01"],
+                    pose=[self._pose(1.0, 2.0, 3.0)],
+                    twist=[self._twist()],
+                )
+                recorder._handle_model_states(msg)
+                self.assertFalse(
+                    (recorder.truth_objects_dir / "model_01.csv").exists()
+                )
+                self.assertEqual(recorder._latest_model_pose_world, {})
+
+                fake_rospy.now_sec = 2219.49
+                recorder._handle_model_states(msg)
+                recorder.close()
+                rows = list(
+                    csv.DictReader(
+                        (recorder.truth_objects_dir / "model_01.csv")
+                        .read_text()
+                        .splitlines()
+                    )
+                )
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(float(rows[0]["recorded_time_sec"]), 2219.49)
+                self.assertEqual(len(fake_rospy.logged_warnings), 1)
+            finally:
+                module.rospy = original_rospy
+
+    def test_model_truth_rate_limits_rows_without_losing_latest_pose_cache(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+            temp_dir = pathlib.Path(temp_dir)
+            fake_rospy = _FakeRospy(now_sec=1.0)
+            original_rospy = module.rospy
+            module.rospy = fake_rospy
+            try:
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.ego_model_name = "ego"
+                recorder.truth_frame = "world"
+                recorder.truth_object_rate_hz = 2.0
+                recorder.truth_objects_dir = temp_dir / "objects"
+                recorder.truth_objects_dir.mkdir()
+                recorder._object_files = {}
+                recorder._link_files = {}
+                recorder._algorithm_files = {}
+                recorder._last_model_states_write_time = None
+                recorder._latest_model_pose_world = {}
+                recorder._ego_initial_pose_written = False
+                recorder._refresh_scenario_manifest_if_needed = lambda: False
+
+                def emit(stamp, x):
+                    fake_rospy.now_sec = stamp
+                    recorder._handle_model_states(
+                        SimpleNamespace(
+                            name=["model_01"],
+                            pose=[self._pose(x=x)],
+                            twist=[self._twist(lx=x)],
+                        )
+                    )
+
+                emit(1.0, 1.0)
+                emit(1.2, 2.0)
+                self.assertEqual(
+                    recorder._latest_model_pose_world["model_01"]["pose"]["position"]["x"],
+                    2.0,
+                )
+                emit(1.5, 3.0)
+
+                recorder.close()
+                rows = list(
+                    csv.DictReader(
+                        (recorder.truth_objects_dir / "model_01.csv")
+                        .read_text()
+                        .splitlines()
+                    )
+                )
+                self.assertEqual([float(row["position_x"]) for row in rows], [1.0, 3.0])
+            finally:
+                module.rospy = original_rospy
+
+    def test_surface_truth_link_is_saved_once_in_drive_link_local_coordinates(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+            temp_dir = pathlib.Path(temp_dir)
+            fake_rospy = _FakeRospy(now_sec=2.02)
+            original_rospy = module.rospy
+            module.rospy = fake_rospy
+            try:
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.truth_dir = temp_dir / "truth"
+                recorder.truth_links_dir = recorder.truth_dir / "links"
+                recorder.truth_links_dir.mkdir(parents=True)
+                recorder.truth_frame = "world"
+                recorder.sensor_scoped_link_name = ""
+                recorder.surface_truth_link_prefixes = ("ground_truth_",)
+                recorder.record_surface_truth_link_trajectories = False
+                recorder.motion_truth_drive_links = {
+                    "model_01": "model_01::link"
+                }
+                recorder.truth_link_rate_hz = 10.0
+                recorder._latest_sensor_pose_world = None
+                recorder._latest_sensor_pose_stamp = None
+                recorder._latest_model_pose_world = {
+                    "model_01": {
+                        "pose": module.pose_to_dict(self._pose(x=100.0)),
+                        "recorded_time_sec": 2.0,
+                    }
+                }
+                recorder._captured_surface_truth_links = set()
+                recorder._surface_truth_catalog_handle = None
+                recorder._link_files = {}
+                recorder._object_files = {}
+                recorder._algorithm_files = {}
+                recorder._last_link_states_write_time = None
+
+                msg = SimpleNamespace(
+                    name=[
+                        "model_01::link",
+                        "model_01::ground_truth_face0_corner0",
+                    ],
+                    pose=[
+                        self._pose(x=10.0),
+                        self._pose(x=11.0, y=2.0, z=3.0),
+                    ],
+                )
+                recorder._handle_link_states(msg)
+                fake_rospy.now_sec = 2.12
+                recorder._handle_link_states(msg)
+                recorder.close()
+
+                catalog_path = recorder.truth_dir / "surface_truth_points.jsonl"
+                records = [json.loads(line) for line in catalog_path.read_text().splitlines()]
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["model_name"], "model_01")
+                self.assertEqual(records[0]["link_name"], "ground_truth_face0_corner0")
+                self.assertEqual(
+                    records[0]["motion_parent_scoped_link_name"],
+                    "model_01::link",
+                )
+                self.assertAlmostEqual(records[0]["local_pose"]["position"]["x"], 1.0)
+                self.assertAlmostEqual(records[0]["local_pose"]["position"]["y"], 2.0)
+                self.assertAlmostEqual(records[0]["pose_pair_delta_sec"], 0.0)
+                link_files = list(recorder.truth_links_dir.iterdir())
+                self.assertEqual(len(link_files), 1)
+                self.assertEqual(link_files[0].name, "model_01_link.csv")
+            finally:
+                module.rospy = original_rospy
+
+    def test_static_surface_truth_catalog_is_loaded_from_parent_marker_visuals(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory(prefix="static_surface_truth_") as temp_dir:
+            world_path = pathlib.Path(temp_dir) / "clean.world"
+            world_path.write_text(
+                """<sdf version='1.6'>
+  <world name='default'>
+    <model name='model_01'>
+      <link name='link'>
+        <visual name='ground_truth_marker_v_000'>
+          <pose>1 2 3 0 0 0</pose>
+        </visual>
+        <visual name='ground_truth_marker_v_001'>
+          <pose>-1 0 0.5 0 0 0</pose>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>"""
+            )
+
+            records = module.load_static_surface_truth_catalog(
+                world_path,
+                {"model_01": "model_01::link"},
+                {2: "model_01"},
+                expected_count=2,
+                max_local_radius_m=4.0,
+                require_clean_world=True,
+            )
+
+            self.assertEqual(len(records), 2)
+            self.assertEqual(
+                records[0]["catalog_source"], "world_static_marker_visual"
+            )
+            self.assertEqual(records[0]["scoped_link_name"], "model_01::ground_truth_v_000")
+            self.assertEqual(records[0]["motion_parent_scoped_link_name"], "model_01::link")
+            self.assertEqual(records[0]["object_id"], 2)
+            self.assertEqual(
+                records[0]["local_pose"]["position"],
+                {"x": 1.0, "y": 2.0, "z": 3.0},
+            )
+
+    def test_static_surface_truth_catalog_rejects_saved_state(self):
+        module = load_module_if_exists()
+        with tempfile.TemporaryDirectory(prefix="static_surface_truth_") as temp_dir:
+            world_path = pathlib.Path(temp_dir) / "state.world"
+            world_path.write_text(
+                """<sdf version='1.6'><world name='default'>
+  <state world_name='default'/>
+  <model name='model_01'><link name='link'>
+    <visual name='ground_truth_marker_v_000'><pose>0 0 0 0 0 0</pose></visual>
+  </link></model>
+</world></sdf>"""
+            )
+            with self.assertRaisesRegex(ValueError, "saved <state>"):
+                module.load_static_surface_truth_catalog(
+                    world_path,
+                    {"model_01": "model_01::link"},
+                    {2: "model_01"},
+                    expected_count=1,
+                    require_clean_world=True,
+                )
+
+    def test_surface_truth_trajectory_mode_selects_landmarks_for_csv_recording(self):
+        module = load_module_if_exists()
+        recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+        recorder.sensor_scoped_link_name = "mid360::livox"
+        recorder.surface_truth_link_prefixes = ("ground_truth_",)
+        recorder.record_surface_truth_link_trajectories = True
+        msg = SimpleNamespace(
+            name=[
+                "mid360::livox",
+                "model_01::link",
+                "model_01::ground_truth_v_000",
+                "bookshelf::ground_truth_v_015",
+            ]
+        )
+
+        selected = recorder._tracked_link_names(msg)
+
+        self.assertEqual(
+            selected,
+            [
+                "mid360::livox",
+                "model_01::ground_truth_v_000",
+                "bookshelf::ground_truth_v_015",
+            ],
+        )
+
+    def test_drive_link_mode_selects_only_sensor_and_configured_drive_links(self):
+        module = load_module_if_exists()
+        recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+        recorder.sensor_scoped_link_name = "mid360::livox"
+        recorder.surface_truth_link_prefixes = ("ground_truth_",)
+        recorder.record_surface_truth_link_trajectories = False
+        recorder.motion_truth_drive_links = {
+            "model_01": "model_01::link",
+            "bookshelf": "bookshelf::link",
+        }
+        msg = SimpleNamespace(
+            name=[
+                "mid360::livox",
+                "model_01::link",
+                "model_01::ground_truth_v_000",
+                "bookshelf::link",
+                "bookshelf::ground_truth_v_015",
+            ]
+        )
+
+        selected = recorder._tracked_link_names(msg)
+
+        self.assertEqual(
+            selected,
+            ["mid360::livox", "model_01::link", "bookshelf::link"],
+        )
+
+    def test_normalize_object_id_catalog_accepts_unique_ids_and_names(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        catalog = module.normalize_object_id_catalog(
+            {"31": "moving_box", 32: "static_wall"}
+        )
+
+        self.assertEqual(catalog, {31: "moving_box", 32: "static_wall"})
+        with self.assertRaises(ValueError):
+            module.normalize_object_id_catalog({0: "invalid_zero"})
+        with self.assertRaises(ValueError):
+            module.normalize_object_id_catalog({31: "panel_a", "31": "panel_b"})
+        for invalid_key in (True, 1.5, "1.5", "not_an_id"):
+            with self.subTest(invalid_key=invalid_key):
+                with self.assertRaises(ValueError):
+                    module.normalize_object_id_catalog({invalid_key: "invalid"})
+
+    def test_debug_recording_allows_incomplete_experiment_metadata(self):
+        module = load_module_if_exists()
+        module.validate_recording_configuration(
+            recording_mode="debug",
+            scenario_id="",
+            launch_scenario_id="",
+            experiment_factors={},
+            object_metadata={},
+            object_id_catalog={1: "model_01"},
+        )
+
+    def test_formal_recording_rejects_missing_required_metadata(self):
+        module = load_module_if_exists()
+        with self.assertRaisesRegex(ValueError, "scenario_id"):
+            module.validate_recording_configuration(
+                recording_mode="formal",
+                scenario_id="",
+                launch_scenario_id="",
+                experiment_factors={},
+                object_metadata={},
+                object_id_catalog={1: "model_01"},
+            )
+
+    def test_formal_zero_motion_configuration_passes_strict_runtime_validation(self):
+        module = load_module_if_exists()
+        scenario_id = "collapse_microdeform_zero_motion_static_platform_r01"
+        module.validate_recording_configuration(
+            recording_mode="formal",
+            scenario_id=scenario_id,
+            launch_scenario_id=scenario_id,
+            experiment_factors={
+                "scene_id": "tracked_mid360_fastlio_collapse_microdeform",
+                "moving_object_quantity": 0,
+                "scene_object_quantity": 2,
+                "platform_condition": "static",
+                "slam_pipeline": "fast_lio",
+                "point_cloud_setting": "mid360_sim_default",
+                "repeat_index": 1,
+            },
+            object_metadata={},
+            object_id_catalog={1: "model_01", 2: "model_02"},
+        )
+
+    def test_formal_recording_rejects_launch_or_controller_scenario_conflicts(self):
+        module = load_module_if_exists()
+        factors = {
+            "scene_id": "scene",
+            "moving_object_quantity": 0,
+            "scene_object_quantity": 1,
+            "platform_condition": "static",
+            "slam_pipeline": "fast_lio",
+            "point_cloud_setting": "mid360_sim_default",
+            "repeat_index": 1,
+        }
+        with self.assertRaisesRegex(ValueError, "launch scenario_id"):
+            module.validate_recording_configuration(
+                recording_mode="formal",
+                scenario_id="configured_case",
+                launch_scenario_id="different_case",
+                experiment_factors=factors,
+                object_metadata={},
+                object_id_catalog={1: "model_01"},
+            )
+
+        with self.assertRaisesRegex(ValueError, "controller scenario_id"):
+            module.validate_control_scenario_ids(
+                "configured_case",
+                [
+                    {
+                        "controlled_object": "model_01",
+                        "scenario_id": "different_case",
+                    }
+                ],
+                evaluated_object_names={"model_01"},
+            )
+
     def _assert_launch_file_keeps_explicit_fallback_args(self, launch_path):
         root = ET.parse(launch_path).getroot()
         args = {element.attrib["name"]: element.attrib.get("default") for element in root.findall("arg")}
@@ -247,6 +1275,18 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
         self.assertEqual(args["angular_velocity_y_deg"], "0.0")
         self.assertEqual(args["control_start_delay_sec"], "")
         self.assertEqual(args["control_duration_sec"], "")
+
+        recorder_node = next(
+            node
+            for node in root.findall("node")
+            if node.attrib.get("name") == "sim_experiment_recorder"
+        )
+        params = {
+            element.attrib.get("name"): element.attrib.get("value")
+            for element in recorder_node.findall("param")
+        }
+        self.assertNotIn("scenario_id", params)
+        self.assertEqual(params["launch_scenario_id"], "$(arg scenario_id)")
 
     def _make_manifest_recorder_fixture(self, module, temp_dir, params=None):
         fake_rospy = _FakeRospy(params=params or {}, now_sec=123.0)
@@ -891,6 +1931,7 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
 
         msg = SimpleNamespace(
             header=SimpleNamespace(seq=9, stamp=SimpleNamespace(secs=12, nsecs=500000000), frame_id="camera_init"),
+            reference_epoch=4,
             regions=[make_persistent_region()],
         )
 
@@ -898,11 +1939,785 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
 
         self.assertEqual(payload["header"]["seq"], 9)
         self.assertEqual(payload["header"]["frame_id"], "camera_init")
+        self.assertEqual(payload["reference_epoch"], 4)
         self.assertEqual(payload["regions"][0]["track_id"], 7)
         self.assertEqual(payload["regions"][0]["state"], 1)
         self.assertEqual(payload["regions"][0]["region_type"], 1)
         self.assertEqual(payload["regions"][0]["center"], {"x": 1.0, "y": 2.0, "z": 3.0})
         self.assertTrue(payload["regions"][0]["confirmed"])
+
+    def test_serializes_object_association_through_alert_outputs(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        point = SimpleNamespace(x=1.0, y=2.0, z=3.0)
+        evidence = SimpleNamespace(
+            id=7,
+            anchor_type=0,
+            object_id=31,
+            object_id_valid=True,
+            object_id_confidence=0.96,
+            observed_object_id=31,
+            observed_object_id_valid=True,
+            observed_object_id_confidence=0.91,
+            observed_object_id_support_count=14,
+            object_association_state=1,
+            obs_state=1,
+            mode=1,
+            position=point,
+            displacement=SimpleNamespace(x=0.01, y=0.0, z=0.0),
+            displacement_score=0.8,
+            disappearance_score=0.0,
+            graph_score=0.7,
+            confidence=0.9,
+            risk_score=0.8,
+            graph_neighbor_count=3,
+            observable=True,
+            comparable=True,
+            active=True,
+        )
+        persistent = make_persistent_region()
+        persistent.object_id = 31
+        persistent.object_id_valid = True
+        persistent.object_id_confidence = 0.94
+        persistent.object_id_ambiguous = False
+        persistent.observed_object_id = 31
+        persistent.observed_object_id_valid = True
+        persistent.observed_object_id_confidence = 0.90
+        persistent.observed_object_id_ambiguous = False
+        persistent.object_association_state = 1
+        persistent.association_consistent_count = 8
+        persistent.association_mismatch_count = 0
+        persistent.association_mixed_count = 0
+        persistent.association_unavailable_count = 2
+
+        evidence_payload = module.serialize_risk_evidence_entry(evidence)
+        persistent_payload = module.serialize_persistent_risk_region(persistent)
+
+        self.assertEqual(evidence_payload["object_id"], 31)
+        self.assertTrue(evidence_payload["object_id_valid"])
+        self.assertEqual(evidence_payload["object_id_confidence"], 0.96)
+        self.assertEqual(evidence_payload["observed_object_id"], 31)
+        self.assertEqual(evidence_payload["observed_object_id_support_count"], 14)
+        self.assertEqual(evidence_payload["object_association_state"], 1)
+        self.assertEqual(persistent_payload["object_id"], 31)
+        self.assertTrue(persistent_payload["object_id_valid"])
+        self.assertEqual(persistent_payload["object_id_confidence"], 0.94)
+        self.assertFalse(persistent_payload["object_id_ambiguous"])
+        self.assertEqual(persistent_payload["observed_object_id"], 31)
+        self.assertEqual(persistent_payload["association_consistent_count"], 8)
+
+    def test_object_observation_stats_are_serialized_and_recorded_before_alignment(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        msg = SimpleNamespace(
+            header=SimpleNamespace(
+                seq=4,
+                stamp=SimpleNamespace(secs=34, nsecs=0),
+                frame_id="camera_init",
+            ),
+            phase=1,
+            reference_epoch=4,
+            window_start=SimpleNamespace(secs=30, nsecs=0),
+            window_end=SimpleNamespace(secs=34, nsecs=0),
+            frame_count=5,
+            total_point_count=20,
+            valid_label_point_count=15,
+            invalid_label_point_count=5,
+            objects=[
+                SimpleNamespace(object_id=17, point_count=8, visible_frame_count=5),
+                SimpleNamespace(object_id=23, point_count=7, visible_frame_count=5),
+            ],
+        )
+
+        payload = module.serialize_object_observation_stats(msg)
+        self.assertEqual(payload["reference_epoch"], 4)
+        self.assertEqual(payload["window_start"]["sec"], 30.0)
+        self.assertEqual(payload["objects"][0]["object_id"], 17)
+        self.assertEqual(payload["objects"][1]["point_count"], 7)
+
+        fake_rospy = _FakeRospy(now_sec=35.0)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        try:
+            with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.algorithm_dir = pathlib.Path(temp_dir)
+                recorder._object_files = {}
+                recorder._link_files = {}
+                recorder._algorithm_files = {}
+                recorder._frame_alignment_written = False
+                recorder._handle_object_observation_stats(msg)
+                recorder.close()
+                records = [
+                    json.loads(line)
+                    for line in (pathlib.Path(temp_dir) / "object_observation_stats.jsonl")
+                    .read_text()
+                    .splitlines()
+                ]
+        finally:
+            module.rospy = original_rospy
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["header"]["stamp"]["sec"], 34.0)
+
+    def test_risk_evidence_is_recorded_before_alignment_and_keeps_inactive_rows(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        msg = SimpleNamespace(
+            header=SimpleNamespace(
+                seq=2,
+                stamp=SimpleNamespace(secs=8, nsecs=0),
+                frame_id="camera_init",
+            ),
+            evidences=[SimpleNamespace(anchor_id=17, active=False, risk_score=0.2)],
+        )
+        fake_rospy = _FakeRospy(now_sec=8.1)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        try:
+            with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.algorithm_dir = pathlib.Path(temp_dir)
+                recorder._algorithm_files = {}
+                recorder._frame_alignment_written = False
+                recorder._handle_risk_evidence(msg)
+                recorder.close()
+
+                payload = json.loads(
+                    (pathlib.Path(temp_dir) / "risk_evidence.jsonl").read_text().strip()
+                )
+        finally:
+            module.rospy = original_rospy
+
+        self.assertEqual(payload["header"]["stamp"]["sec"], 8.0)
+        self.assertEqual(len(payload["evidences"]), 1)
+        self.assertFalse(payload["evidences"][0]["active"])
+
+    def test_compact_anchor_stream_reconstructs_static_and_dynamic_fields(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        point = lambda x, y, z: SimpleNamespace(x=x, y=y, z=z)
+        anchor = SimpleNamespace(
+            id=17,
+            anchor_type=1,
+            object_id=31,
+            object_id_valid=True,
+            object_id_confidence=0.95,
+            object_id_support_count=40,
+            center=point(1.0, 2.0, 3.0),
+            normal=point(0.0, 0.0, 1.0),
+            edge_normal=point(1.0, 0.0, 0.0),
+            ref_center=point(1.0, 2.0, 3.0),
+            matched_center=point(1.1, 2.0, 3.0),
+            matched_delta=point(0.1, 0.0, 0.0),
+            disp_mean=[0.1, 0.0, 0.0],
+            disp_cov_diag=[1.0e-4] * 3,
+            vel_mean=[0.02, 0.0, 0.0],
+            observable=True,
+            comparable=True,
+            significant=True,
+            obs_state=1,
+            reference_epoch=4,
+            reference_stamp=SimpleNamespace(secs=5, nsecs=0),
+            reference_origin=0,
+        )
+
+        fake_rospy = _FakeRospy(now_sec=10.1)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        try:
+            with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+                temp_dir = pathlib.Path(temp_dir)
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.algorithm_dir = temp_dir / "algorithm"
+                recorder.meta_dir = temp_dir / "meta"
+                recorder.algorithm_dir.mkdir()
+                recorder.meta_dir.mkdir()
+                recorder._algorithm_files = {}
+                recorder._frame_alignment_written = False
+                recorder.record_flush_max_rows = 100
+                recorder.record_flush_interval_sec = 60.0
+
+                def emit(seq, stamp, dx):
+                    anchor.matched_delta = point(dx, 0.0, 0.0)
+                    anchor.disp_mean = [dx, 0.0, 0.0]
+                    msg = SimpleNamespace(
+                        header=SimpleNamespace(
+                            seq=seq,
+                            stamp=SimpleNamespace(secs=stamp, nsecs=0),
+                            frame_id="camera_init",
+                        ),
+                        reference_epoch=4,
+                        reference_initialized_at=SimpleNamespace(secs=5, nsecs=0),
+                        anchors=[anchor],
+                        total_anchor_count=30,
+                        object_summaries=[
+                            SimpleNamespace(
+                                object_id=31,
+                                total_count=30,
+                                comparable_count=1,
+                                significant_count=1,
+                                plane_count=1,
+                                edge_count=0,
+                                band_count=0,
+                                excluded_not_observable=12,
+                                excluded_weak_or_missing=17,
+                            )
+                        ],
+                    )
+                    recorder._handle_anchor_states(msg)
+
+                emit(1, 10, 0.1)
+                emit(3, 11, 0.2)
+                emit(7, 12, 0.3)
+                recorder.close()
+
+                catalog = [
+                    json.loads(line)
+                    for line in (recorder.algorithm_dir / "anchor_catalog.jsonl")
+                    .read_text()
+                    .splitlines()
+                ]
+                observations = [
+                    json.loads(line)
+                    for line in (recorder.algorithm_dir / "anchor_observations.jsonl")
+                    .read_text()
+                    .splitlines()
+                ]
+                reconstructed = module.reconstruct_anchor_state_records(
+                    catalog, observations
+                )
+                completion = json.loads((recorder.meta_dir / "run_complete.json").read_text())
+        finally:
+            module.rospy = original_rospy
+
+        self.assertEqual(len(catalog), 1)
+        self.assertEqual(len(observations), 3)
+        self.assertEqual(reconstructed[0]["anchors"][0]["anchor_type"], 1)
+        self.assertEqual(reconstructed[2]["anchors"][0]["matched_delta"]["x"], 0.3)
+        self.assertNotIn("state_cov", observations[0]["anchors"][0])
+        self.assertEqual(observations[0]["total_anchor_count"], 30)
+        self.assertEqual(
+            observations[0]["object_summaries"],
+            [
+                {
+                    "object_id": 31,
+                    "total_count": 30,
+                    "comparable_count": 1,
+                    "significant_count": 1,
+                    "plane_count": 1,
+                    "edge_count": 0,
+                    "band_count": 0,
+                    "excluded_not_observable": 12,
+                    "excluded_weak_or_missing": 17,
+                }
+            ],
+        )
+        self.assertEqual(completion["streams"]["anchor_catalog"]["row_count"], 1)
+        self.assertEqual(completion["streams"]["anchor_observations"]["row_count"], 3)
+        self.assertEqual(
+            completion["streams"]["anchor_observations"]["estimated_drop_count"],
+            1,
+        )
+        self.assertTrue(completion["clean_shutdown"])
+
+    def test_direct_anchor_serialization_matches_compact_schema(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        point = lambda x, y, z: SimpleNamespace(x=x, y=y, z=z)
+        anchor = SimpleNamespace(
+            id=17,
+            anchor_type=2,
+            object_id=31,
+            object_id_valid=True,
+            object_id_confidence=0.95,
+            object_id_support_count=40,
+            center=point(1.0, 2.0, 3.0),
+            normal=point(0.0, 0.0, 1.0),
+            edge_normal=point(1.0, 0.0, 0.0),
+            ref_center=point(1.0, 2.0, 3.0),
+            matched_delta=point(0.1, 0.0, 0.0),
+            disp_cov_diag=[2.0e-4, 2.0e-4, 2.0e-4],
+            reference_epoch=4,
+            reference_stamp=SimpleNamespace(secs=5, nsecs=0),
+            reference_origin=0,
+        )
+
+        full = module.serialize_anchor_state(anchor)
+        expected_static, expected_dynamic = module.split_serialized_anchor_state(full)
+
+        self.assertEqual(module.serialize_anchor_static_state(anchor), expected_static)
+        self.assertEqual(
+            module.serialize_anchor_dynamic_state(anchor),
+            expected_dynamic,
+        )
+        self.assertNotIn("state_cov", expected_dynamic)
+        self.assertEqual(
+            module.serialize_anchor_dynamic_state(anchor)["disp_cov_diag"],
+            [2.0e-4, 2.0e-4, 2.0e-4],
+        )
+
+    def test_anchor_processing_worker_drains_accepted_messages_before_close(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+        recorder.anchor_processing_queue_size = 4
+        recorder.anchor_processing_enqueue_timeout_sec = 0.5
+        recorder._anchor_processing_thread = None
+        recorder._anchor_processing_queue = None
+        recorder._anchor_processing_error = None
+        recorder._anchor_processing_stats = {
+            "enqueued_message_count": 0,
+            "processed_message_count": 0,
+            "max_queue_depth": 0,
+            "queue_full_error_count": 0,
+            "processing_error_count": 0,
+        }
+        processed = []
+        recorder._record_anchor_states = lambda msg, recorded_at: processed.append(
+            (msg, recorded_at)
+        )
+
+        recorder._start_anchor_processing_worker()
+        recorder._enqueue_anchor_states("frame-1", {"sec": 1.0})
+        recorder._enqueue_anchor_states("frame-2", {"sec": 2.0})
+        recorder._close_anchor_processing_worker()
+
+        self.assertEqual(
+            processed,
+            [("frame-1", {"sec": 1.0}), ("frame-2", {"sec": 2.0})],
+        )
+        self.assertEqual(
+            recorder._anchor_processing_stats["processed_message_count"], 2
+        )
+        self.assertIsNone(recorder._anchor_processing_thread)
+        self.assertIsNone(recorder._anchor_processing_queue)
+
+    def test_algorithm_write_after_close_is_ignored(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        fake_rospy = _FakeRospy(now_sec=10.0)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        try:
+            with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+                temp_dir = pathlib.Path(temp_dir)
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.algorithm_dir = temp_dir / "algorithm"
+                recorder.meta_dir = temp_dir / "meta"
+                recorder.algorithm_dir.mkdir()
+                recorder.meta_dir.mkdir()
+                recorder._algorithm_files = {}
+                recorder._closed = False
+                recorder.record_flush_max_rows = 100
+                recorder.record_flush_interval_sec = 60.0
+
+                self.assertTrue(
+                    recorder._append_jsonl(
+                        "anchors", "anchors.jsonl", {"recorded_at_sec": 1.0}
+                    )
+                )
+                recorder.close()
+                self.assertFalse(
+                    recorder._append_jsonl(
+                        "anchors", "anchors.jsonl", {"recorded_at_sec": 2.0}
+                    )
+                )
+
+                records = (
+                    recorder.algorithm_dir / "anchors.jsonl"
+                ).read_text().splitlines()
+                self.assertEqual(len(records), 1)
+        finally:
+            module.rospy = original_rospy
+
+    def test_close_called_inside_recording_callback_does_not_deadlock(self):
+        module = load_module_if_exists()
+        recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+        recorder._callback_condition = threading.Condition()
+        recorder._active_callbacks = 0
+        recorder._closed = False
+        recorder._subscribers = []
+        finished = []
+        recorder._finish_close = lambda: finished.append(True)
+
+        @module.recording_callback
+        def callback(instance):
+            instance.close()
+
+        worker = threading.Thread(target=lambda: callback(recorder), daemon=True)
+        worker.start()
+        worker.join(timeout=0.5)
+
+        self.assertFalse(worker.is_alive(), "close() waited for its own callback")
+        self.assertEqual(finished, [True])
+        self.assertTrue(recorder._closed)
+
+    def test_callback_already_in_progress_can_finish_writing_during_close(self):
+        module = load_module_if_exists()
+        fake_rospy = _FakeRospy(now_sec=10.0)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        try:
+            with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.algorithm_dir = pathlib.Path(temp_dir) / "algorithm"
+                recorder.algorithm_dir.mkdir()
+                recorder._callback_condition = threading.Condition()
+                recorder._active_callbacks = 0
+                recorder._closed = False
+                recorder._subscribers = []
+                recorder._algorithm_files = {}
+                recorder.record_flush_max_rows = 1
+                recorder.record_flush_interval_sec = 60.0
+                recorder._finish_close = lambda: None
+                entered = threading.Event()
+                release = threading.Event()
+                write_results = []
+
+                @module.recording_callback
+                def callback(instance):
+                    entered.set()
+                    release.wait(timeout=1.0)
+                    write_results.append(
+                        instance._append_jsonl(
+                            "anchors", "anchors.jsonl", {"recorded_at_sec": 1.0}
+                        )
+                    )
+
+                worker = threading.Thread(target=lambda: callback(recorder), daemon=True)
+                worker.start()
+                self.assertTrue(entered.wait(timeout=0.5))
+                closer = threading.Thread(target=recorder.close, daemon=True)
+                closer.start()
+                release.set()
+                worker.join(timeout=0.5)
+                closer.join(timeout=0.5)
+
+                self.assertFalse(worker.is_alive())
+                self.assertFalse(closer.is_alive())
+                self.assertEqual(write_results, [True])
+                self.assertTrue(recorder._closed)
+                for handle in recorder._algorithm_files.values():
+                    handle.close()
+        finally:
+            module.rospy = original_rospy
+
+    def test_close_discards_only_incomplete_trailing_algorithm_frame(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        fake_rospy = _FakeRospy(now_sec=20.0)
+        original_rospy = module.rospy
+        module.rospy = fake_rospy
+        try:
+            with tempfile.TemporaryDirectory(prefix="sim_experiment_recorder_") as temp_dir:
+                temp_dir = pathlib.Path(temp_dir)
+                recorder = module.SimExperimentRecorder.__new__(module.SimExperimentRecorder)
+                recorder.algorithm_dir = temp_dir / "algorithm"
+                recorder.meta_dir = temp_dir / "meta"
+                recorder.algorithm_dir.mkdir()
+                recorder.meta_dir.mkdir()
+                recorder._algorithm_files = {}
+                recorder._closed = False
+                recorder.record_flush_max_rows = 100
+                recorder.record_flush_interval_sec = 60.0
+
+                def append(stream_name, stamp):
+                    payload = {
+                        "header": {
+                            "seq": int(stamp),
+                            "stamp": {"sec": float(stamp), "secs": int(stamp), "nsecs": 0},
+                        }
+                    }
+                    if stream_name == "object_observation_stats":
+                        payload["phase"] = 1
+                    recorder._append_jsonl(
+                        stream_name,
+                        module.FRAME_COMMIT_STREAM_FILES[stream_name],
+                        payload,
+                    )
+
+                for stamp in (1, 2):
+                    for stream_name in module.FRAME_COMMIT_STREAM_FILES:
+                        append(stream_name, stamp)
+
+                for stream_name in module.FRAME_COMMIT_STREAM_FILES:
+                    if stream_name not in ("processing_stamps", "anchor_observations"):
+                        append(stream_name, 3)
+
+                recorder.close()
+
+                for stream_name, filename in module.FRAME_COMMIT_STREAM_FILES.items():
+                    records = [
+                        json.loads(line)
+                        for line in (recorder.algorithm_dir / filename).read_text().splitlines()
+                    ]
+                    self.assertEqual(
+                        [record["header"]["stamp"]["sec"] for record in records],
+                        [1.0, 2.0],
+                        stream_name,
+                    )
+
+                completion = json.loads(
+                    (recorder.meta_dir / "run_complete.json").read_text()
+                )
+                self.assertEqual(
+                    completion["frame_commit"]["last_complete_stamp_sec"],
+                    2.0,
+                )
+                self.assertEqual(
+                    completion["frame_commit"]["discarded_incomplete_suffix_rows"],
+                    {
+                        stream_name: 1
+                        for stream_name in module.FRAME_COMMIT_STREAM_FILES
+                        if stream_name not in ("processing_stamps", "anchor_observations")
+                    },
+                )
+                self.assertEqual(
+                    completion["streams"]["clusters"]["row_count"],
+                    2,
+                )
+        finally:
+            module.rospy = original_rospy
+
+    def test_frame_commit_does_not_hide_an_interior_missing_stream_row(self):
+        module = load_module_if_exists()
+        records_by_stream = {}
+        for stream_name in module.FRAME_COMMIT_STREAM_FILES:
+            stamps = (1.0, 3.0) if stream_name == "clusters" else (1.0, 2.0, 3.0)
+            records_by_stream[stream_name] = [
+                {
+                    "stamp_key": module.frame_commit_stamp_key(stamp),
+                    "phase": 1,
+                    "start_offset": index,
+                }
+                for index, stamp in enumerate(stamps)
+            ]
+
+        plan = module.build_frame_commit_plan(records_by_stream)
+
+        self.assertEqual(plan["last_complete_stamp_sec"], 3.0)
+        self.assertEqual(plan["trim_counts"], {})
+
+    def test_compact_anchor_stream_keeps_visible_count_dynamic(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        static, dynamic = module.split_serialized_anchor_state(
+            {"id": 5, "anchor_type": 0, "visible_count": 21}
+        )
+
+        self.assertNotIn("visible_count", static)
+        self.assertEqual(dynamic["visible_count"], 21)
+
+    def test_serialize_anchor_states_preserves_reference_lifecycle_fields(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        point = lambda x, y, z: SimpleNamespace(x=x, y=y, z=z)
+        anchor = SimpleNamespace(
+            id=17,
+            anchor_type=2,
+            object_id=31,
+            object_id_valid=True,
+            object_id_confidence=0.96,
+            object_id_support_count=48,
+            center=point(1.0, 2.0, 3.0),
+            normal=point(0.0, 0.0, 1.0),
+            edge_normal=point(1.0, 0.0, 0.0),
+            visible_count=20,
+            point_count=65,
+            ref_quality=0.91,
+            covariance_quality=0.87,
+            type_stability=0.84,
+            shape_linearity=0.18,
+            shape_planarity=0.73,
+            shape_scattering=0.09,
+            observation_support_count=11,
+            edge_support_count=7,
+            current_shape_linearity=0.81,
+            current_shape_planarity=0.14,
+            current_shape_scattering=0.05,
+            edge_direction_angle_deg=8.0,
+            edge_geometry_stability=0.78,
+            edge_geometry_valid=True,
+            scalar_count=2,
+            scalar_type=[0, 1, 3],
+            scalar_z=[0.004, 0.012, 0.0],
+            scalar_r=[1.0e-4, 2.0e-4, 0.0],
+            scalar_valid=[True, True, False],
+            ref_center=point(1.0, 2.0, 3.0),
+            matched_center=point(1.4, 2.1, 3.0),
+            matched_delta=point(0.4, 0.1, 0.0),
+            predicted_center=point(1.38, 2.08, 3.0),
+            predicted_displacement=point(0.38, 0.08, 0.0),
+            reacquisition_score=0.91,
+            reacquisition_innovation_norm=0.022,
+            disp_mean=[0.39, 0.11, 0.0],
+            disp_cov_diag=[1.0e-4] * 3,
+            vel_mean=[0.02, 0.01, 0.0],
+            dof_obs=2,
+            chi2_stat=12.5,
+            disp_norm=0.405,
+            disp_normal=0.0,
+            disp_edge=0.39,
+            cmp_score=0.92,
+            cusum_score=5.0,
+            directional_strength=0.06,
+            directional_coherence=0.75,
+            directional_persistent=True,
+            instantaneous_displacement_evidence=True,
+            persistent_candidate=True,
+            cluster_member=True,
+            graph_candidate=False,
+            graph_neighbor_count=3,
+            graph_coherent_score=0.82,
+            graph_temporal_score=0.88,
+            graph_persistence_score=1.2,
+            local_bg_count=8,
+            local_contrast_score=4.2,
+            local_rel_norm=0.018,
+            local_rel_normal=0.007,
+            local_rel_edge=0.015,
+            plane_bg_count=3,
+            plane_contrast_score=2.8,
+            plane_rel_norm=0.016,
+            plane_rel_normal=0.006,
+            plane_rel_edge=0.013,
+            permanent_deformed=True,
+            permanent_displacement=[0.39, 0.11, 0.0],
+            comparable=True,
+            observable=True,
+            significant=True,
+            reacquired=True,
+            obs_state=1,
+            detection_mode=1,
+            disappearance_score=0.0,
+            reference_epoch=4,
+            reference_stamp=SimpleNamespace(secs=42, nsecs=500000000),
+            reference_origin=0,
+        )
+        message = SimpleNamespace(
+            header=SimpleNamespace(
+                seq=3,
+                frame_id="camera_init",
+                stamp=SimpleNamespace(secs=50, nsecs=0),
+            ),
+            reference_epoch=4,
+            reference_initialized_at=SimpleNamespace(secs=42, nsecs=500000000),
+            anchors=[anchor],
+            total_anchor_count=42,
+            object_summaries=[
+                SimpleNamespace(
+                    object_id=2,
+                    total_count=42,
+                    comparable_count=17,
+                    significant_count=5,
+                    plane_count=10,
+                    edge_count=4,
+                    band_count=3,
+                    excluded_not_observable=8,
+                    excluded_weak_or_missing=17,
+                )
+            ],
+        )
+
+        serialized = module.serialize_anchor_states(message)
+
+        self.assertEqual(serialized["total_anchor_count"], 42)
+        self.assertEqual(
+            serialized["object_summaries"],
+            [
+                {
+                    "object_id": 2,
+                    "total_count": 42,
+                    "comparable_count": 17,
+                    "significant_count": 5,
+                    "plane_count": 10,
+                    "edge_count": 4,
+                    "band_count": 3,
+                    "excluded_not_observable": 8,
+                    "excluded_weak_or_missing": 17,
+                }
+            ],
+        )
+        self.assertEqual(serialized["reference_epoch"], 4)
+        self.assertEqual(serialized["reference_initialized_at"]["sec"], 42.5)
+        self.assertEqual(serialized["anchors"][0]["obs_state"], 1)
+        self.assertTrue(serialized["anchors"][0]["observable"])
+        self.assertEqual(
+            serialized["anchors"][0]["matched_center"],
+            {"x": 1.4, "y": 2.1, "z": 3.0},
+        )
+        self.assertEqual(
+            serialized["anchors"][0]["matched_delta"],
+            {"x": 0.4, "y": 0.1, "z": 0.0},
+        )
+        self.assertEqual(serialized["anchors"][0]["reference_epoch"], 4)
+        self.assertEqual(serialized["anchors"][0]["reference_stamp"]["sec"], 42.5)
+        self.assertEqual(serialized["anchors"][0]["reference_origin"], 0)
+        self.assertEqual(serialized["anchors"][0]["object_id"], 31)
+        self.assertTrue(serialized["anchors"][0]["object_id_valid"])
+        self.assertEqual(serialized["anchors"][0]["object_id_confidence"], 0.96)
+        self.assertEqual(serialized["anchors"][0]["object_id_support_count"], 48)
+        self.assertEqual(
+            serialized["anchors"][0]["normal"],
+            {"x": 0.0, "y": 0.0, "z": 1.0},
+        )
+        self.assertEqual(
+            serialized["anchors"][0]["edge_normal"],
+            {"x": 1.0, "y": 0.0, "z": 0.0},
+        )
+        self.assertEqual(serialized["anchors"][0]["visible_count"], 20)
+        self.assertEqual(serialized["anchors"][0]["point_count"], 65)
+        self.assertEqual(serialized["anchors"][0]["ref_quality"], 0.91)
+        self.assertEqual(serialized["anchors"][0]["covariance_quality"], 0.87)
+        self.assertEqual(serialized["anchors"][0]["type_stability"], 0.84)
+        self.assertEqual(serialized["anchors"][0]["shape_linearity"], 0.18)
+        self.assertEqual(serialized["anchors"][0]["shape_planarity"], 0.73)
+        self.assertEqual(serialized["anchors"][0]["shape_scattering"], 0.09)
+        self.assertEqual(serialized["anchors"][0]["observation_support_count"], 11)
+        self.assertEqual(serialized["anchors"][0]["edge_support_count"], 7)
+        self.assertTrue(serialized["anchors"][0]["edge_geometry_valid"])
+        self.assertEqual(serialized["anchors"][0]["scalar_z"], [0.004, 0.012, 0.0])
+        self.assertEqual(
+            serialized["anchors"][0]["predicted_center"],
+            {"x": 1.38, "y": 2.08, "z": 3.0},
+        )
+        self.assertEqual(serialized["anchors"][0]["reacquisition_innovation_norm"], 0.022)
+        self.assertEqual(serialized["anchors"][0]["disp_cov_diag"], [1.0e-4] * 3)
+        self.assertEqual(serialized["anchors"][0]["vel_mean"], [0.02, 0.01, 0.0])
+        self.assertNotIn("state_cov", serialized["anchors"][0])
+        self.assertEqual(serialized["anchors"][0]["dof_obs"], 2)
+        self.assertEqual(serialized["anchors"][0]["chi2_stat"], 12.5)
+        self.assertEqual(serialized["anchors"][0]["disp_edge"], 0.39)
+        self.assertEqual(serialized["anchors"][0]["cmp_score"], 0.92)
+        self.assertEqual(serialized["anchors"][0]["directional_strength"], 0.06)
+        self.assertEqual(serialized["anchors"][0]["directional_coherence"], 0.75)
+        self.assertTrue(serialized["anchors"][0]["directional_persistent"])
+        self.assertTrue(
+            serialized["anchors"][0]["instantaneous_displacement_evidence"]
+        )
+        self.assertTrue(serialized["anchors"][0]["cluster_member"])
+        self.assertTrue(serialized["anchors"][0]["permanent_deformed"])
 
     def test_handle_persistent_risk_regions_writes_empty_jsonl_after_alignment_ready(self):
         module = load_module_if_exists()
@@ -966,6 +2781,7 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                         stamp=SimpleNamespace(secs=10, nsecs=0),
                         frame_id="camera_init",
                     ),
+                    reference_epoch=1,
                     regions=[make_persistent_region(track_id=7, state=0, confirmed=False)],
                 )
                 second_msg = SimpleNamespace(
@@ -974,11 +2790,22 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                         stamp=SimpleNamespace(secs=11, nsecs=0),
                         frame_id="camera_init",
                     ),
+                    reference_epoch=1,
                     regions=[make_persistent_region(track_id=7, state=1, confirmed=True)],
+                )
+                reset_msg = SimpleNamespace(
+                    header=SimpleNamespace(
+                        seq=3,
+                        stamp=SimpleNamespace(secs=12, nsecs=0),
+                        frame_id="camera_init",
+                    ),
+                    reference_epoch=2,
+                    regions=[make_persistent_region(track_id=7, state=0, confirmed=False)],
                 )
 
                 recorder._handle_persistent_risk_regions(first_msg)
                 recorder._handle_persistent_risk_regions(second_msg)
+                recorder._handle_persistent_risk_regions(reset_msg)
 
                 events_path = recorder.algorithm_dir / "persistent_track_events.jsonl"
                 self.assertTrue(events_path.exists())
@@ -988,7 +2815,7 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                     if line.strip()
                 ]
                 event_types = [event["event_type"] for event in events]
-                self.assertIn("track_created", event_types)
+                self.assertEqual(event_types.count("track_created"), 2)
                 self.assertIn("frame_status", event_types)
                 self.assertIn("state_transition", event_types)
                 self.assertIn("first_confirmed", event_types)
@@ -996,10 +2823,12 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                 frame_events = [
                     event for event in events if event["event_type"] == "frame_status"
                 ]
-                self.assertEqual(len(frame_events), 2)
+                self.assertEqual(len(frame_events), 3)
                 self.assertEqual(frame_events[0]["lifecycle"]["first_seen"]["sec"], 10.0)
                 self.assertIsNone(frame_events[0]["lifecycle"]["first_confirmed"])
                 self.assertEqual(frame_events[1]["lifecycle"]["first_confirmed"]["sec"], 11.0)
+                self.assertEqual(frame_events[2]["reference_epoch"], 2)
+                self.assertEqual(frame_events[2]["lifecycle"]["first_seen"]["sec"], 12.0)
                 self.assertEqual(frame_events[1]["confirmed"], True)
                 self.assertEqual(frame_events[1]["state_name"], "CONFIRMED")
                 self.assertEqual(frame_events[1]["support_mass"], 3.0)
@@ -1094,6 +2923,18 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                     "~gt_tum_filename": "gt_sensor_world_tum.txt",
                     "~odom_tum_filename": "odom_raw_tum.txt",
                     "~scenario_id": "collapse_microdeform_case_01",
+                    "~experiment_factors": {
+                        "scene_id": "collapse_world_v3",
+                        "visibility_condition": "partial_occlusion",
+                        "repeat_index": 1,
+                    },
+                    "~object_metadata": {
+                        "obstacle_block_left_clone_clone": {
+                            "shape": "rectangular_panel",
+                            "size_class": "large",
+                            "visibility_condition": "partial_occlusion",
+                        }
+                    },
                     "~controlled_object": "obstacle_block_left_clone_clone",
                     "~command_frame": "world",
                     "~linear_velocity_x": "0.0",
@@ -1124,6 +2965,7 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
             module.RiskEvidenceArray = object
             module.RiskRegions = object
             module.StructureMotions = object
+            recorder = None
             try:
                 recorder = module.SimExperimentRecorder()
 
@@ -1177,7 +3019,19 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                 self.assertTrue(ablation_manifest_path.exists())
                 self.assertTrue(config_snapshot_path.exists())
                 self.assertTrue(scenario_manifest_path.exists())
+                scenario_manifest = json.loads(scenario_manifest_path.read_text())
+                self.assertEqual(
+                    scenario_manifest["experiment_factors"]["scene_id"],
+                    "collapse_world_v3",
+                )
+                self.assertEqual(
+                    scenario_manifest["object_metadata"]
+                    ["obstacle_block_left_clone_clone"]["shape"],
+                    "rectangular_panel",
+                )
             finally:
+                if recorder is not None:
+                    recorder.close()
                 module.rospy = original_rospy
                 module.tf = original_tf
                 module.ModelStates = original_model_states
@@ -1203,6 +3057,7 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                 },
                 "significance": {"enable_cusum": True},
                 "directional_motion": {"enable": True},
+                "persistent_risk": {"min_confirmed_mean_risk": 0.65},
                 "ablation": {
                     "variant": "single_model_ekf_no_drift",
                     "disable_covariance_inflation": True,
@@ -1256,6 +3111,7 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
             module.RiskEvidenceArray = object
             module.RiskRegions = object
             module.StructureMotions = object
+            recorder = None
             try:
                 recorder = module.SimExperimentRecorder()
 
@@ -1286,6 +3142,12 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                     ablation_manifest["effective_runtime"]["imm_enable_model_competition"]
                 )
                 self.assertEqual(
+                    ablation_manifest["effective_runtime"][
+                        "persistent_min_confirmed_mean_risk"
+                    ],
+                    0.65,
+                )
+                self.assertEqual(
                     config_snapshot["source_config_path"],
                     "/tmp/deform_monitor_v2_sim.yaml",
                 )
@@ -1297,6 +3159,8 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                     "single_model_ekf_no_drift",
                 )
             finally:
+                if recorder is not None:
+                    recorder.close()
                 module.rospy = original_rospy
                 module.tf = original_tf
                 module.ModelStates = original_model_states
@@ -1336,6 +3200,55 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
         self.assertEqual(payload["controls"][0]["start_delay_sec"], 8.0)
         self.assertEqual(payload["controls"][0]["duration_sec"], 20.0)
         self.assertEqual(payload["source"], "explicit")
+
+    def test_build_scenario_manifest_preserves_reproducible_experiment_factors(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        factors = {
+            "scene_id": "collapse_world_v3",
+            "shape_set": ["plane", "wedge", "curved_band"],
+            "object_quantity": 6,
+            "motion_profile": "accelerating_rotation",
+            "visibility_condition": "partial_occlusion",
+            "repeat_index": 2,
+        }
+        payload = module.build_scenario_manifest_payload(
+            run_dir=pathlib.Path("/tmp/sim_run_000"),
+            scenario_id="case_02",
+            experiment_factors=factors,
+            object_metadata={
+                "moving_panel": {
+                    "shape": "rectangular_panel",
+                    "size_class": "large",
+                    "motion_profile": "accelerating_rotation",
+                    "visibility_condition": "partial_occlusion",
+                }
+            },
+        )
+
+        self.assertEqual(payload["experiment_factors"], factors)
+        self.assertEqual(
+            payload["object_metadata"]["moving_panel"]["shape"],
+            "rectangular_panel",
+        )
+
+    def test_normalize_experiment_factors_rejects_non_finite_values(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        with self.assertRaisesRegex(ValueError, "JSON-serializable"):
+            module.normalize_experiment_factors({"speed_mps": float("nan")})
+
+    def test_normalize_object_metadata_requires_attribute_mappings(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        with self.assertRaisesRegex(ValueError, "attribute mapping"):
+            module.normalize_object_metadata({"moving_panel": "large"})
 
     def test_build_scenario_manifest_prefers_discovered_control_metadata(self):
         module = load_module_if_exists()
@@ -1377,6 +3290,49 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
         self.assertEqual(payload["controls"][0]["controlled_object"], "discovered_object")
         self.assertEqual(payload["controls"][0]["duration_sec"], 12.0)
         self.assertEqual(payload["scenario_id"], "explicit_case")
+
+    def test_authoritative_control_selection_supports_arbitrary_evaluated_objects(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        controls = [
+            {
+                "controller_namespace": "/wedge_motion",
+                "controlled_object": "moving_wedge",
+                "command_frame": "world",
+                "start_delay_sec": 2.0,
+                "duration_sec": 10.0,
+                "scenario_id": "multi_shape_case",
+            },
+            {
+                "controller_namespace": "/panel_motion",
+                "controlled_object": "moving_panel",
+                "command_frame": "world",
+                "start_delay_sec": 4.0,
+                "duration_sec": 12.0,
+                "scenario_id": "multi_shape_case",
+            },
+            {
+                "controller_namespace": "/sensor_platform_motion",
+                "controlled_object": "sensor_platform",
+                "command_frame": "world",
+                "start_delay_sec": 0.0,
+                "duration_sec": 30.0,
+                "scenario_id": "multi_shape_case",
+            },
+        ]
+
+        selected = module.select_authoritative_discovered_controls(
+            "multi_shape_case",
+            controls,
+            allowed_object_names={"moving_panel", "moving_wedge"},
+        )
+
+        self.assertEqual(
+            [item["controlled_object"] for item in selected],
+            ["moving_panel", "moving_wedge"],
+        )
 
     def test_write_run_metadata_initially_writes_fallback_control_metadata(self):
         module = load_module_if_exists()
@@ -2064,6 +4020,7 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
             recorder._latest_sensor_pose_stamp = None
             recorder.truth_frame = "world"
             recorder._link_files = {}
+            recorder._tracked_link_names = lambda _msg: []
 
             msg = SimpleNamespace(
                 name=["mid360_fastlio::mid360_link"],
@@ -2085,6 +4042,7 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
                 },
             )
             self.assertEqual(recorder._latest_sensor_pose_stamp, fake_rospy.now_sec)
+            recorder.close()
         finally:
             module.rospy = original_rospy
 
@@ -2131,6 +4089,25 @@ class SimExperimentRecorderHelperTests(unittest.TestCase):
             payload["trajectory_export"]["gt_pose_source"],
             "ground_truth_odometry_plus_tf",
         )
+
+    def test_hardware_manifest_records_reproducible_platform_fields(self):
+        module = load_module_if_exists()
+        if module is None:
+            self.fail(f"Missing implementation script: {SCRIPT_PATH}")
+
+        payload = module.build_hardware_manifest_payload(
+            hostname="rescue-compute-01",
+            platform_string="Linux-5.15-test",
+            cpu_model="Example CPU 8-Core",
+            logical_cpu_count=16,
+            memory_total_bytes=32 * 1024 ** 3,
+        )
+
+        self.assertEqual(payload["hostname"], "rescue-compute-01")
+        self.assertEqual(payload["platform"], "Linux-5.15-test")
+        self.assertEqual(payload["cpu_model"], "Example CPU 8-Core")
+        self.assertEqual(payload["logical_cpu_count"], 16)
+        self.assertEqual(payload["memory_total_bytes"], 32 * 1024 ** 3)
 
     def test_build_run_info_disables_trajectory_export_without_sensor_link(self):
         module = load_module_if_exists()

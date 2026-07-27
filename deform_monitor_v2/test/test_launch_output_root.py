@@ -1,6 +1,3 @@
-# Author: zgliu@cumt.edu.cn
-# Affiliation: China University of Mining and Technology
-# Open-source release date: 2026-04-20
 from __future__ import annotations
 
 import pathlib
@@ -13,6 +10,7 @@ LAUNCH_PATH = (
     / "launch"
     / "deform_monitor_v2_sim.launch"
 )
+DYNAMIC_LAUNCH_PATH = LAUNCH_PATH.with_name("deform_monitor_v2_sim_dynamic.launch")
 
 
 class DeformMonitorSimLaunchTests(unittest.TestCase):
@@ -37,6 +35,46 @@ class DeformMonitorSimLaunchTests(unittest.TestCase):
         self.assertEqual(
             param_pairs.get("output_root"),
             "$(arg sim_experiment_output_root)",
+        )
+
+    def test_launch_exposes_final_alarm_risk_threshold_as_config_override(self):
+        tree = ET.parse(LAUNCH_PATH)
+        root = tree.getroot()
+
+        args = {elem.attrib.get("name"): elem.attrib for elem in root.findall("arg")}
+        self.assertIn("alarm_mean_risk_threshold", args)
+        self.assertEqual(args["alarm_mean_risk_threshold"].get("default"), "0.55")
+
+        monitor_node = next(
+            node for node in root.findall("node")
+            if node.attrib.get("name") == "deform_monitor_v2"
+        )
+        params = {
+            elem.attrib.get("name"): elem.attrib.get("value")
+            for elem in monitor_node.findall("param")
+        }
+        self.assertEqual(
+            params.get("deform_monitor/persistent_risk/min_confirmed_mean_risk"),
+            "$(arg alarm_mean_risk_threshold)",
+        )
+
+    def test_dynamic_launch_uses_the_same_final_alarm_threshold_override(self):
+        tree = ET.parse(DYNAMIC_LAUNCH_PATH)
+        root = tree.getroot()
+
+        args = {elem.attrib.get("name"): elem.attrib for elem in root.findall("arg")}
+        self.assertEqual(args["alarm_mean_risk_threshold"].get("default"), "0.55")
+        monitor_node = next(
+            node for node in root.findall("node")
+            if node.attrib.get("name") == "deform_monitor_v2"
+        )
+        params = {
+            elem.attrib.get("name"): elem.attrib.get("value")
+            for elem in monitor_node.findall("param")
+        }
+        self.assertEqual(
+            params.get("deform_monitor/persistent_risk/min_confirmed_mean_risk"),
+            "$(arg alarm_mean_risk_threshold)",
         )
 
 

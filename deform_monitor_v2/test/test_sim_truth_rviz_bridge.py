@@ -1,13 +1,3 @@
-# Author: zgliu@cumt.edu.cn
-# Affiliation: China University of Mining and Technology
-# Open-source release date: 2026-04-20
-"""Unit tests for sim_truth_rviz_bridge.py.
-
-The numeric positions and thresholds in this file are hand-crafted geometry
-fixtures for transform and marker-publishing checks. They do not encode
-experimental outcomes and are not consumed by the runtime pipeline.
-"""
-
 import importlib.util
 import pathlib
 import sys

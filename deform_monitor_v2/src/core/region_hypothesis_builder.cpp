@@ -1,10 +1,6 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/region_hypothesis_builder.hpp"
+
+#include "deform_monitor_v2/core/observable_subspace.hpp"
 
 #include <limits>
 #include <queue>
@@ -20,14 +16,24 @@ double Clamp01(double value) {
 Eigen::Vector3d CurrentAnchorPosition(const AnchorReference& anchor,
                                       const AnchorTrackState& state,
                                       const CurrentObservation& observation) {
+  const ObservableSubspace subspace = BuildObservableSubspace(anchor);
   if (state.reacquired || observation.reacquired) {
-    return observation.matched_center_R;
+    return anchor.center_R + ProjectObservableVector(
+                                 observation.matched_center_R - anchor.center_R,
+                                 subspace,
+                                 state.dof_obs);
   }
   if (state.comparable && observation.observable &&
       observation.matched_center_R.squaredNorm() > 1.0e-10) {
-    return observation.matched_center_R;
+    return anchor.center_R + ProjectObservableVector(
+                                 observation.matched_center_R - anchor.center_R,
+                                 subspace,
+                                 state.dof_obs);
   }
-  return anchor.center_R + state.x_mix.block<3, 1>(0, 0);
+  return anchor.center_R + ProjectObservableVector(
+                               state.x_mix.block<3, 1>(0, 0),
+                               subspace,
+                               state.dof_obs);
 }
 
 double AnchorWeight(const AnchorTrackState& state) {
@@ -128,8 +134,7 @@ bool RegionHypothesisBuilder::IsNewAnchor(const AnchorTrackState& state,
   if (state.mode != DetectionMode::DISPLACEMENT) {
     return false;
   }
-  if (!(state.reacquired || observation.reacquired || state.cluster_member ||
-        state.graph_candidate || state.persistent_candidate || state.significant)) {
+  if (!(state.significant || state.cluster_member)) {
     return false;
   }
   return state.disp_norm >= params_.new_disp_threshold;
@@ -223,7 +228,10 @@ RegionHypothesisVector RegionHypothesisBuilder::BuildRegions(
       sum_ref += w * anchors[idx].center_R;
       sum_curr += w * curr_pos;
       sum_normal += w * anchors[idx].normal_R;
-      sum_motion += w * states[idx].x_mix.block<3, 1>(0, 0);
+      sum_motion += w * ProjectObservableVector(
+                              states[idx].x_mix.block<3, 1>(0, 0),
+                              BuildObservableSubspace(anchors[idx]),
+                              states[idx].dof_obs);
       sum_disp += w * states[idx].disp_norm;
       sum_disappear += w * states[idx].disappearance_score;
       sum_graph += w * std::max(states[idx].graph_temporal_score, states[idx].graph_coherent_score);

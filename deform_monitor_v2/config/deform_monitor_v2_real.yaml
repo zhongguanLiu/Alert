@@ -114,12 +114,20 @@ deform_monitor:
     tau_disp_cos: 0.60
     tau_coherent_diff: 0.010
     tau_temporal_change: 0.005      # 0.006 → 0.005
-    min_anchor_disp: 0.050
+    min_anchor_disp: 0.030
     ema_alpha: 0.40
     cusum_k: 0.04                   # 0.03 → 0.04
     cusum_h: 2.00                   # 1.50 → 2.00
-    tau_graph_support: 0.85
-    tau_graph_temporal: 0.90
+    tau_graph_support: 0.80
+    tau_graph_temporal: 0.85
+
+  object_association:
+    enable: false
+    invalid_id: 0
+    max_id: 254
+    min_support_points: 3
+    min_purity: 0.80
+    quantization_tolerance: 0.25
 
   anchor:
     I_min: 16.0
@@ -167,21 +175,21 @@ deform_monitor:
 
   significance:
     enable_cusum: true
-    alpha_s: 0.01
-    tau_A_norm: 0.050
-    tau_A_normal: 0.040
-    tau_A_edge: 0.035
+    alpha_s: 0.03
+    tau_A_norm: 0.035
+    tau_A_normal: 0.025
+    tau_A_edge: 0.025
     tau_disappear: 0.90             # 0.88 → 0.90
     disappear_frames: 8             # 6 → 8
     cusum_k: 4.0
-    cusum_h: 25.0
+    cusum_h: 10.0
 
 
   directional_motion:
     enable: true
     lambda0: 0.80
-    tau_s: 0.050
-    tau_c: 0.65
+    tau_s: 0.035
+    tau_c: 0.55
     tau_d: 5.0
     epsilon: 1.0e-4
 
@@ -205,10 +213,10 @@ deform_monitor:
     compact_tau_ng_deg: 55.0        # 65 → 55
     compact_tau_u_cos: 0.65         # 0.60 → 0.65
     compact_tau_corr: 0.20          # 0.15 → 0.20
-    compact_seed_disp: 0.020
+    compact_seed_disp: 0.015
     compact_seed_chi2: 20.0         # 15 → 20
-    compact_min_cluster_size: 5     # 4 → 5
-    compact_tau_cluster_disp: 0.025 # 0.015 → 0.025
+    compact_min_cluster_size: 4
+    compact_tau_cluster_disp: 0.015
     compact_tau_cluster_chi2: 50.0  # 40 → 50
     compact_max_bbox_diag: 0.40     # 0.45 → 0.40
     beta_dir: 0.35
@@ -218,10 +226,10 @@ deform_monitor:
     sigma_m: 0.01
     sigma_d: 0.15
     tau_edge_score: 0.75
-    min_cluster_size: 5
+    min_cluster_size: 4
     min_cluster_size_disappear: 3   # 2 → 3
-    tau_cluster_disp: 0.015
-    tau_cluster_chi2: 12.0
+    tau_cluster_disp: 0.010
+    tau_cluster_chi2: 9.21
     tau_cluster_disappear: 0.78     # 0.72 → 0.78
 
   structure_correspondence:
@@ -262,6 +270,7 @@ deform_monitor:
     show_all_anchors: false
     show_comparable_anchors: false
     show_cluster_boxes: false
+    show_detected_object_boxes: false
     show_cluster_text: false
     text_only_significant: true
     arrows_only_clustered_or_reacquired: true
@@ -276,6 +285,9 @@ deform_monitor:
     cluster_outline_alpha: 0.95
     cluster_outline_width: 0.018
     cluster_min_box_size: 0.06
+    detected_object_box_margin: 0.08
+    detected_object_box_min_size: 0.12
+    detected_object_box_alpha: 0.20
 
   risk_visualization:
     enable: false

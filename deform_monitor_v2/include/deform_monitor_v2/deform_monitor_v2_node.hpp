@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #ifndef DEFORM_MONITOR_V2_NODE_HPP
 #define DEFORM_MONITOR_V2_NODE_HPP
 
@@ -16,6 +10,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
@@ -24,6 +19,7 @@
 #include "deform_monitor_v2/core/anchor_builder.hpp"
 #include "deform_monitor_v2/core/covariance_extractor.hpp"
 #include "deform_monitor_v2/core/current_observation_extractor.hpp"
+#include "deform_monitor_v2/core/object_observation_stats.hpp"
 #include "deform_monitor_v2/core/imm_information_filter.hpp"
 #include "deform_monitor_v2/core/motion_clusterer.hpp"
 #include "deform_monitor_v2/core/region_correspondence_solver.hpp"
@@ -33,7 +29,9 @@
 #include "deform_monitor_v2/core/risk_field_builder.hpp"
 #include "deform_monitor_v2/core/reference_manager.hpp"
 #include "deform_monitor_v2/core/scalar_measurement_builder.hpp"
+#include "deform_monitor_v2/core/weak_plane_motion_detector.hpp"
 #include "deform_monitor_v2/data_types.hpp"
+#include "deform_monitor_v2/ObjectObservationStats.h"
 #include "deform_monitor_v2/risk_visualization_publisher.hpp"
 #include "deform_monitor_v2/structure_visualization_publisher.hpp"
 #include "deform_monitor_v2/visualization_publisher.hpp"
@@ -45,11 +43,63 @@ namespace deform_monitor_v2 {
 struct StageRuntimeRecord {
   ros::Time stamp;
   uint64_t frame_index = 0;
+  uint32_t reference_epoch = 0;
   double total_ms = 0.0;
   double stage_a_ms = 0.0;
   double stage_b_ms = 0.0;
   double stage_c_ms = 0.0;
   double stage_d_ms = 0.0;
+  // Diagnostic sub-timers within Stage A ("Observation model & temporal
+  // fusion"). Split into the temporal-window point-cloud cache build (cost
+  // depends on input_point_count, not anchor_count) vs. the per-anchor
+  // parallel extraction from that cache (cost depends on anchor_count).
+  // Always sum to stage_a_ms.
+  double stage_a_prepare_ms = 0.0;  // obs_extractor_.PrepareTemporalWindow/PrepareSingleFrame
+  double stage_a_extract_ms = 0.0;  // ParallelFor: ExtractForAnchorFromPreparedCache
+  // Diagnostic sub-timers within Stage B (IMM state estimation). Prediction,
+  // measurement update, and observable-state/statistic projection are timed
+  // separately. ParallelFor dispatch/join overhead remains in stage_b_ms and
+  // is reported by the analysis script as a residual.
+  double stage_b_predict_ms = 0.0;     // ParallelFor: imm_filter_.Predict()
+  double stage_b_update_ms = 0.0;      // ParallelFor: imm_filter_.Update()
+  double stage_b_statistics_ms = 0.0;  // ParallelFor: projected state/statistics + observation metadata
+  // Diagnostic sub-timers within Stage C ("Evidence fusion cascade"). The
+  // first is the parallel per-anchor CUSUM/directional-motion update; the
+  // rest are the sequential (non-ParallelFor) tail that was the suspected
+  // reason Stage C scales worse than Stage B. Always sum to stage_c_ms.
+  double stage_c_cusum_ms = 0.0;           // ParallelFor: UpdateCusum/UpdateDirectionalMotion/disappearance
+  double stage_c_local_contrast_ms = 0.0;  // UpdateLocalContrastStates()
+  double stage_c_graph_temporal_ms = 0.0;  // UpdateGraphTemporalStates()
+  double stage_c_weak_plane_ms = 0.0;      // weak_plane_motion_detector_.Update()
+  double stage_c_significance_ms = 0.0;    // sequential significance-judgment loop
+  // Diagnostic sub-timers within Stage D ("Drift compensation & risk
+  // aggregation" in the paper's Table III) -- Stage D is the single
+  // dominant, fully single-threaded cost in the current 10-object batch
+  // (~185ms of ~282ms total), and the two most-suspected culprits (RViz-only
+  // visualization publishing, the O(cluster*member*anchor) cluster-membership
+  // scan) turned out to only account for a few percent of it combined. These
+  // fields split Stage D into its actual sub-steps so the real bottleneck can
+  // be identified instead of guessed at. They always sum to stage_d_ms.
+  double stage_d_bias_ms = 0.0;               // EstimateBackgroundBias/ApplyBackgroundBias
+  double stage_d_cluster_ms = 0.0;            // clusterer_.Cluster() + membership marking
+  double stage_d_structure_ms = 0.0;          // region_hypothesis_builder_ + region_correspondence_solver_
+  double stage_d_risk_ms = 0.0;               // risk_adapter_.Build() + risk_field_builder_.Build()/ExtractRegions()
+  double stage_d_persistent_track_ms = 0.0;   // persistent_risk_tracker_.Update()
+  double stage_d_ref_stats_ms = 0.0;          // ref_manager_.UpdateReferenceStatistics()
+  double stage_d_structure_unit_ms = 0.0;     // structure_unit_tracker_->Update() (only if enabled)
+  double stage_d_incremental_ms = 0.0;        // TryIncrementalAnchorPromotion()
+  double stage_d_publish_ms = 0.0;            // PublishResults()
+  uint64_t input_frame_count = 0;
+  uint64_t input_point_count = 0;
+  std::vector<uint64_t> input_point_counts_by_frame;
+  uint64_t anchor_count = 0;
+  uint64_t comparable_anchor_count = 0;
+  uint64_t significant_anchor_count = 0;
+  uint64_t cluster_count = 0;
+  uint64_t risk_evidence_count = 0;
+  uint64_t risk_voxel_count = 0;
+  uint64_t risk_region_count = 0;
+  uint64_t persistent_track_count = 0;
 };
 
 class ScopedWallTimer {
@@ -146,6 +196,7 @@ private:
   void ProcessFrame(const FrameInput& frame);
   void ProcessFrameWindow(const ObservationFrameDeque& frames);
   void PublishResults(const ros::Time& stamp);
+  void PublishObjectObservationStats(const ObjectObservationStatsState& summary);
   void PublishEmptyResults(const ros::Time& stamp);
   void TryProcessQueuedFrames();
   void WorkerLoop();
@@ -196,6 +247,7 @@ private:
   ros::Publisher debug_cloud_pub_;
   ros::Publisher anchor_markers_pub_;
   ros::Publisher motion_markers_pub_;
+  ros::Publisher object_observation_stats_pub_;
   ros::Publisher risk_evidence_pub_;
   ros::Publisher risk_voxels_pub_;
   ros::Publisher risk_regions_pub_;
@@ -210,7 +262,9 @@ private:
   AnchorBuilder anchor_builder_;
   ScalarMeasurementBuilder scalar_builder_;
   CurrentObservationExtractor obs_extractor_;
+  ObjectObservationStatsAccumulator reference_observation_stats_;
   ImmInformationFilter imm_filter_;
+  WeakPlaneMotionDetector weak_plane_motion_detector_;
   MotionClusterer clusterer_;
   RegionHypothesisBuilder region_hypothesis_builder_;
   RegionCorrespondenceSolver region_correspondence_solver_;
@@ -231,6 +285,8 @@ private:
 
   int init_frame_count_ = 0;
   bool reference_ready_ = false;
+  uint32_t reference_epoch_id_ = 0;
+  ros::Time reference_initialized_stamp_;
   ReferenceInitFrameVector init_frames_;
   ObservationFrameDeque temporal_window_frames_;
   size_t frames_since_last_window_process_ = 0;

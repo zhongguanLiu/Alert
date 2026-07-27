@@ -99,6 +99,14 @@ deform_monitor:
     tau_graph_support: 0.80
     tau_graph_temporal: 0.85
 
+  object_association:
+    enable: false
+    invalid_id: 0
+    max_id: 254
+    min_support_points: 3
+    min_purity: 0.80
+    quantization_tolerance: 0.25
+
   anchor:
 
 
@@ -229,6 +237,7 @@ deform_monitor:
     show_all_anchors: false
     show_comparable_anchors: false
     show_cluster_boxes: false
+    show_detected_object_boxes: false
     show_cluster_text: false
     text_only_significant: true
     arrows_only_clustered_or_reacquired: true
@@ -243,9 +252,12 @@ deform_monitor:
     cluster_outline_alpha: 0.95
     cluster_outline_width: 0.018
     cluster_min_box_size: 0.06
+    detected_object_box_margin: 0.08
+    detected_object_box_min_size: 0.12
+    detected_object_box_alpha: 0.20
 
   risk_visualization:
-    enable: false 
+    enable: false
     publish_evidence: true
     publish_voxels: true
     publish_regions: true

@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   sensor_msgs
   std_msgs
+  std_srvs
   message_generation
 )
 
@@ -34,10 +35,6 @@ include_directories(/usr/include/)
 
 link_directories(${GAZEBO_LIBRARY_DIRS})
 
-#This is designed for whose proto installed in system is not 2.6. We can install the version of proto in local dir
-#include_directories(/home/lfc/proto/include/)
-#link_directories(/home/lfc/proto/lib/)
-
 include_directories(
          include
         ${catkin_INCLUDE_DIRS}
@@ -46,8 +43,8 @@ include_directories(
 
 catkin_package(
         INCLUDE_DIRS include
-        LIBRARIES livox_laser_simulation
-        CATKIN_DEPENDS geometry_msgs livox_ros_driver message_runtime roscpp rospy sensor_msgs std_msgs tf
+        LIBRARIES livox_laser_simulation synchronized_multi_model_motion_world_plugin
+        CATKIN_DEPENDS geometry_msgs livox_ros_driver message_runtime roscpp rospy sensor_msgs std_msgs std_srvs tf
 )
 
 catkin_install_python(PROGRAMS
@@ -55,6 +52,7 @@ catkin_install_python(PROGRAMS
   scripts/keyboard_cmd.py
   scripts/model_motion_controller.py
   scripts/spawn_or_replace_model.py
+  scripts/synchronized_motion_cli.py
   scripts/work_patrol_cmd.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
@@ -62,3 +60,10 @@ catkin_install_python(PROGRAMS
 add_library(livox_laser_simulation SHARED src/livox_points_plugin.cpp src/livox_ode_multiray_shape.cpp)
 add_dependencies(livox_laser_simulation ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(livox_laser_simulation ${catkin_LIBRARIES} ${GAZEBO_LIBRARIES} ${PCL_LIBRARIES} RayPlugin)
+
+add_library(synchronized_multi_model_motion_world_plugin SHARED
+  src/synchronized_multi_model_motion_world_plugin.cpp)
+add_dependencies(synchronized_multi_model_motion_world_plugin
+  ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(synchronized_multi_model_motion_world_plugin
+  ${catkin_LIBRARIES} ${GAZEBO_LIBRARIES})

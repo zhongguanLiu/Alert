@@ -33,7 +33,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: ""
+    SyncSource: surround
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -225,7 +225,9 @@ Visualization Manager:
       Marker Topic: /deform/motion_markers
       Name: MarkerArray
       Namespaces:
-        {}
+        anchor_disp: true
+        permanent_deform: true
+        reacquired_centers: true
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
@@ -237,13 +239,13 @@ Visualization Manager:
       Queue Size: 100
       Value: false
     - Class: rviz/MarkerArray
-      Enabled: false
+      Enabled: true
       Marker Topic: /deform/risk_markers
       Name: MarkerArray
       Namespaces:
         {}
       Queue Size: 100
-      Value: false
+      Value: true
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /deform/risk_markers
@@ -253,13 +255,15 @@ Visualization Manager:
       Queue Size: 100
       Value: false
     - Class: rviz/MarkerArray
-      Enabled: false
+      Enabled: true
       Marker Topic: /deform/structure_markers
       Name: MarkerArray
       Namespaces:
-        {}
+        structure_motion_arrows: true
+        structure_new_regions: true
+        structure_old_regions: true
       Queue Size: 100
-      Value: false
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 0; 0; 0
@@ -288,7 +292,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 5.864656448364258
+      Distance: 9.911378860473633
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -296,17 +300,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -0.8091106414794922
-        Y: 0.6366283297538757
-        Z: -0.06542084366083145
+        X: 1.178066372871399
+        Y: 0.2602418065071106
+        Z: -0.005247165448963642
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.064796805381775
+      Pitch: 0.7297974824905396
       Target Frame: global
-      Yaw: 0.7149257659912109
+      Yaw: 4.9549641609191895
     Saved: ~
 Window Geometry:
   Displays:
@@ -324,5 +328,5 @@ Window Geometry:
   Views:
     collapsed: true
   Width: 1653
-  X: 907
-  Y: 57
+  X: 2927
+  Y: 227

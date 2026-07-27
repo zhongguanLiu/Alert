@@ -3,6 +3,9 @@
 //
 
 #include "livox_laser_simulation/livox_points_plugin.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <pcl_conversions/pcl_conversions.h>
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
@@ -592,7 +595,9 @@ void LivoxPointsPlugin::PublishLivoxROSDriverCustomMsg(std::vector<std::pair<int
             pt.line = pair.second.line;
             // ROS_INFO_STREAM("offset_time: " << pt.offset_time );
             pt.tag = 0x10;
-            pt.reflectivity = 100;
+            const double bounded_intensity =
+                std::max(0.0, std::min(255.0, static_cast<double>(intensity)));
+            pt.reflectivity = static_cast<uint8_t>(std::lround(bounded_intensity));
             pt.offset_time = (1e9/200000*i);
             msg.points.push_back(pt);
         }

@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>Anchor-based micro-motion monitoring on top of FAST-LIO outputs</description>
 
-  <maintainer email="zgliu@cumt.edu.cn">zgliu</maintainer>
+  <maintainer email="zgliu@example.com">zgliu</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>catkin</buildtool_depend>
@@ -12,6 +12,7 @@
   <depend>roscpp</depend>
   <depend>rospy</depend>
   <depend>fast_lio</depend>
+  <depend>livox_ros_driver</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>

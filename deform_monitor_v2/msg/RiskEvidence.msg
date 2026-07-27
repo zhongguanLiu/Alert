@@ -1,5 +1,17 @@
 int32 id
 uint8 anchor_type
+uint16 object_id
+bool object_id_valid
+float64 object_id_confidence
+uint16 observed_object_id
+bool observed_object_id_valid
+float64 observed_object_id_confidence
+int32 observed_object_id_support_count
+uint8 ASSOCIATION_UNAVAILABLE=0
+uint8 ASSOCIATION_CONSISTENT=1
+uint8 ASSOCIATION_MISMATCH=2
+uint8 ASSOCIATION_MIXED=3
+uint8 object_association_state
 uint8 obs_state
 uint8 mode
 geometry_msgs/Point position

@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include <gtest/gtest.h>
 
 #include <sys/stat.h>
@@ -17,6 +11,10 @@
 #include <std_msgs/Empty.h>
 
 #include "deform_monitor_v2/core/imm_information_filter.hpp"
+#include "deform_monitor_v2/core/risk_evidence_adapter.hpp"
+#include "deform_monitor_v2/core/risk_field_builder.hpp"
+#include "deform_monitor_v2/core/persistent_risk_region_tracker.hpp"
+#include "deform_monitor_v2/risk_visualization_publisher.hpp"
 #define private public
 #include "deform_monitor_v2/deform_monitor_v2_node.hpp"
 #undef private
@@ -85,6 +83,24 @@ ImmInformationFilter MakeFilter(bool enable_type_constraint,
   return filter;
 }
 
+ImmInformationFilter MakeDirectionalFilter(double tau_s, double tau_c) {
+  ImmInformationFilter filter;
+  ImmParams imm_params;
+  ObservabilityParams observability_params;
+  SignificanceParams significance_params;
+  DirectionalMotionParams directional_params;
+  directional_params.enable = true;
+  directional_params.lambda0 = 0.95;
+  directional_params.tau_s = tau_s;
+  directional_params.tau_c = tau_c;
+  filter.SetParams(imm_params,
+                   observability_params,
+                   significance_params,
+                   directional_params,
+                   0.8);
+  return filter;
+}
+
 std::string MakeTempDir() {
   char path_template[] = "/tmp/deform_runtime_testXXXXXX";
   char* created = ::mkdtemp(path_template);
@@ -104,11 +120,23 @@ TEST(StageRuntimeLoggerTest, WritesJsonlRecordWithAllFields) {
   StageRuntimeRecord record;
   record.stamp = ros::Time(12, 345000000);
   record.frame_index = 7;
+  record.reference_epoch = 3;
   record.total_ms = 4.5;
   record.stage_a_ms = 1.1;
   record.stage_b_ms = 1.2;
   record.stage_c_ms = 1.3;
   record.stage_d_ms = 0.9;
+  record.input_frame_count = 2;
+  record.input_point_count = 42000;
+  record.input_point_counts_by_frame = {21000, 21000};
+  record.anchor_count = 310;
+  record.comparable_anchor_count = 240;
+  record.significant_anchor_count = 17;
+  record.cluster_count = 4;
+  record.risk_evidence_count = 15;
+  record.risk_voxel_count = 26;
+  record.risk_region_count = 3;
+  record.persistent_track_count = 2;
 
   ASSERT_TRUE(logger.Write(record));
 
@@ -117,11 +145,24 @@ TEST(StageRuntimeLoggerTest, WritesJsonlRecordWithAllFields) {
   std::string line;
   ASSERT_TRUE(static_cast<bool>(std::getline(input, line)));
   EXPECT_NE(line.find("\"frame_index\":7"), std::string::npos);
+  EXPECT_NE(line.find("\"reference_epoch\":3"), std::string::npos);
   EXPECT_NE(line.find("\"total_ms\":4.500"), std::string::npos);
   EXPECT_NE(line.find("\"stage_a_ms\":1.100"), std::string::npos);
   EXPECT_NE(line.find("\"stage_b_ms\":1.200"), std::string::npos);
   EXPECT_NE(line.find("\"stage_c_ms\":1.300"), std::string::npos);
   EXPECT_NE(line.find("\"stage_d_ms\":0.900"), std::string::npos);
+  EXPECT_NE(line.find("\"input_frame_count\":2"), std::string::npos);
+  EXPECT_NE(line.find("\"input_point_count\":42000"), std::string::npos);
+  EXPECT_NE(line.find("\"input_point_counts_by_frame\":[21000,21000]"),
+            std::string::npos);
+  EXPECT_NE(line.find("\"anchor_count\":310"), std::string::npos);
+  EXPECT_NE(line.find("\"comparable_anchor_count\":240"), std::string::npos);
+  EXPECT_NE(line.find("\"significant_anchor_count\":17"), std::string::npos);
+  EXPECT_NE(line.find("\"cluster_count\":4"), std::string::npos);
+  EXPECT_NE(line.find("\"risk_evidence_count\":15"), std::string::npos);
+  EXPECT_NE(line.find("\"risk_voxel_count\":26"), std::string::npos);
+  EXPECT_NE(line.find("\"risk_region_count\":3"), std::string::npos);
+  EXPECT_NE(line.find("\"persistent_track_count\":2"), std::string::npos);
 }
 
 TEST(ScopedWallTimerTest, AccumulatesElapsedMillisecondsOnScopeExit) {
@@ -242,6 +283,211 @@ TEST(ImmInformationFilterAblationTest, DisableCusumAndDirectionalKeepsPersistenc
   EXPECT_FALSE(state.directional_persistent);
 }
 
+TEST(ImmInformationFilterDirectionalTest, ConsistentCentimeterMotionPassesDimensionlessCoherence) {
+  const AnchorReference anchor = MakePlaneAnchor();
+  ImmInformationFilter filter = MakeDirectionalFilter(0.05, 0.65);
+  AnchorTrackState state;
+  filter.InitializeAnchorState(&state);
+  state.comparable = true;
+
+  for (int i = 0; i < 3; ++i) {
+    state.x_mix.block<3, 1>(0, 0) = 0.03 * Eigen::Vector3d::UnitZ();
+    filter.UpdateDirectionalMotion(&state, anchor, 1.0, 1.0);
+  }
+
+  EXPECT_TRUE(state.directional_persistent);
+}
+
+TEST(ImmInformationFilterDirectionalTest, AccumulationStrengthIsStableAcrossSamplingRates) {
+  const AnchorReference anchor = MakePlaneAnchor();
+  ImmInformationFilter filter = MakeDirectionalFilter(0.01, 0.0);
+  AnchorTrackState slow_state;
+  AnchorTrackState fast_state;
+  filter.InitializeAnchorState(&slow_state);
+  filter.InitializeAnchorState(&fast_state);
+  slow_state.comparable = true;
+  fast_state.comparable = true;
+
+  for (int i = 0; i < 5; ++i) {
+    slow_state.x_mix.block<3, 1>(0, 0) = 0.03 * Eigen::Vector3d::UnitZ();
+    filter.UpdateDirectionalMotion(&slow_state, anchor, 1.0, 1.0);
+  }
+  for (int i = 0; i < 50; ++i) {
+    fast_state.x_mix.block<3, 1>(0, 0) = 0.03 * Eigen::Vector3d::UnitZ();
+    filter.UpdateDirectionalMotion(&fast_state, anchor, 1.0, 0.1);
+  }
+
+  EXPECT_NEAR(slow_state.directional_S.norm(), fast_state.directional_S.norm(), 0.01);
+  EXPECT_NEAR(slow_state.directional_magnitude_sum,
+              fast_state.directional_magnitude_sum, 0.01);
+}
+
+TEST(ImmInformationFilterDirectionalTest, AlternatingMotionCancelsInsteadOfReinforcing) {
+  const AnchorReference anchor = MakePlaneAnchor();
+  ImmInformationFilter filter = MakeDirectionalFilter(0.04, 0.0);
+  AnchorTrackState state;
+  filter.InitializeAnchorState(&state);
+  state.comparable = true;
+
+  state.x_mix.block<3, 1>(0, 0) = 0.03 * Eigen::Vector3d::UnitZ();
+  filter.UpdateDirectionalMotion(&state, anchor, 1.0, 1.0);
+  state.x_mix.block<3, 1>(0, 0) = -0.03 * Eigen::Vector3d::UnitZ();
+  filter.UpdateDirectionalMotion(&state, anchor, 1.0, 1.0);
+
+  EXPECT_FALSE(state.directional_persistent);
+  EXPECT_LT(state.directional_S.norm(), 0.01);
+}
+
+TEST(RiskEvidenceAdapterTest, UnconfirmedHighDisplacementDoesNotBypassFinalDecision) {
+  RiskEvidenceAdapter adapter;
+  RiskVisualizationParams risk_params;
+  risk_params.min_confidence = 0.0;
+  risk_params.min_risk_score = 0.0;
+  SignificanceParams significance_params;
+  significance_params.tau_A_norm = 0.01;
+  significance_params.tau_A_normal = 0.01;
+  significance_params.tau_A_edge = 0.01;
+  GraphTemporalParams graph_params;
+  adapter.SetParams(risk_params, significance_params, graph_params);
+
+  AnchorReferenceVector anchors(1, MakePlaneAnchor());
+  anchors[0].ref_quality = 1.0;
+  anchors[0].covariance_quality = 1.0;
+  anchors[0].type_stability = 1.0;
+  anchors[0].object_id = 31;
+  anchors[0].object_id_valid = true;
+  anchors[0].object_id_confidence = 0.96;
+  AnchorStateVector states(1);
+  states[0].observable = true;
+  states[0].comparable = true;
+  states[0].gate_state = ObsGateState::OBSERVABLE_MATCHED;
+  states[0].disp_norm = 0.10;
+  states[0].disp_normal = 0.10;
+  states[0].chi2_stat = 100.0;
+  states[0].significant = false;
+  states[0].mode = DetectionMode::NONE;
+  CurrentObservationVector observations(1);
+  observations[0].support_count = 10;
+
+  const RiskEvidenceVector evidence =
+      adapter.Build(anchors, states, observations, MotionClusterVector());
+
+  ASSERT_EQ(evidence.size(), 1u);
+  EXPECT_GT(evidence[0].displacement_score, 0.25);
+  EXPECT_FALSE(evidence[0].active);
+}
+
+TEST(RiskEvidenceAdapterTest, FinalSignificantDecisionActivatesEligibleEvidence) {
+  RiskEvidenceAdapter adapter;
+  RiskVisualizationParams risk_params;
+  risk_params.min_confidence = 0.0;
+  risk_params.min_risk_score = 0.0;
+  SignificanceParams significance_params;
+  significance_params.tau_A_norm = 0.01;
+  significance_params.tau_A_normal = 0.01;
+  significance_params.tau_A_edge = 0.01;
+  GraphTemporalParams graph_params;
+  adapter.SetParams(risk_params, significance_params, graph_params);
+
+  AnchorReferenceVector anchors(1, MakePlaneAnchor());
+  anchors[0].ref_quality = 1.0;
+  anchors[0].covariance_quality = 1.0;
+  anchors[0].type_stability = 1.0;
+  anchors[0].object_id = 31;
+  anchors[0].object_id_valid = true;
+  anchors[0].object_id_confidence = 0.96;
+  AnchorStateVector states(1);
+  states[0].observable = true;
+  states[0].comparable = true;
+  states[0].gate_state = ObsGateState::OBSERVABLE_MATCHED;
+  states[0].disp_norm = 0.10;
+  states[0].disp_normal = 0.10;
+  states[0].chi2_stat = 100.0;
+  states[0].significant = true;
+  states[0].mode = DetectionMode::DISPLACEMENT;
+  CurrentObservationVector observations(1);
+  observations[0].support_count = 10;
+
+  const RiskEvidenceVector evidence =
+      adapter.Build(anchors, states, observations, MotionClusterVector());
+
+  ASSERT_EQ(evidence.size(), 1u);
+  EXPECT_TRUE(evidence[0].active);
+  EXPECT_EQ(evidence[0].object_id, 31u);
+  EXPECT_TRUE(evidence[0].object_id_valid);
+  EXPECT_DOUBLE_EQ(evidence[0].object_id_confidence, 0.96);
+}
+
+TEST(RiskObjectAssociationTest, PropagatesOneObjectAndFlagsCrossObjectMerge) {
+  RiskVisualizationParams risk_params;
+  risk_params.voxel_size = 0.05;
+  risk_params.kernel_sigma = 0.05;
+  risk_params.kernel_radius = 0.05;
+  risk_params.min_confidence = 0.0;
+  risk_params.min_graph_neighbors = 0;
+  risk_params.min_risk_score = 0.0;
+  risk_params.min_voxel_risk = 0.0;
+  risk_params.min_region_voxels = 1;
+  risk_params.min_region_mean_risk = 0.0;
+
+  AnchorReference first_anchor = MakePlaneAnchor();
+  first_anchor.center_R = Eigen::Vector3d(0.001, 0.001, 0.001);
+  AnchorReference second_anchor = first_anchor;
+  second_anchor.id = 8;
+  second_anchor.center_R = Eigen::Vector3d(0.002, 0.001, 0.001);
+  const AnchorReferenceVector anchors{first_anchor, second_anchor};
+
+  RiskEvidenceState first;
+  first.id = 7;
+  first.position_R = first_anchor.center_R;
+  first.object_id = 31;
+  first.object_id_valid = true;
+  first.object_id_confidence = 0.95;
+  first.confidence = 1.0;
+  first.risk_score = 1.0;
+  first.displacement_score = 1.0;
+  first.active = true;
+  RiskEvidenceState second = first;
+  second.id = 8;
+  second.position_R = second_anchor.center_R;
+
+  RiskFieldBuilder builder;
+  builder.SetParams(risk_params);
+  const auto one_object_voxels = builder.Build(
+      anchors, RiskEvidenceVector{first, second});
+  const auto one_object_regions = builder.ExtractRegions(one_object_voxels);
+
+  ASSERT_EQ(one_object_regions.size(), 1u);
+  EXPECT_EQ(one_object_regions[0].object_id, 31u);
+  EXPECT_TRUE(one_object_regions[0].object_id_valid);
+  EXPECT_FALSE(one_object_regions[0].object_id_ambiguous);
+
+  PersistentRiskRegionTracker tracker;
+  PersistentRiskParams persistent_params;
+  persistent_params.enable = true;
+  tracker.SetParams(persistent_params);
+  const auto tracks = tracker.Update(one_object_regions, ros::Time(1, 0));
+  ASSERT_EQ(tracks.size(), 1u);
+  EXPECT_EQ(tracks[0].object_id, 31u);
+  EXPECT_TRUE(tracks[0].object_id_valid);
+  EXPECT_FALSE(tracks[0].object_id_ambiguous);
+
+  RiskVisualizationPublisher publisher;
+  const auto message = publisher.BuildPersistentRiskRegionsMsg(
+      tracks, ros::Time(1, 0), "camera_init", 2);
+  ASSERT_EQ(message.regions.size(), 1u);
+  EXPECT_EQ(message.regions[0].object_id, 31u);
+  EXPECT_TRUE(message.regions[0].object_id_valid);
+
+  second.object_id = 32;
+  const auto mixed_voxels = builder.Build(
+      anchors, RiskEvidenceVector{first, second});
+  const auto mixed_regions = builder.ExtractRegions(mixed_voxels);
+  ASSERT_EQ(mixed_regions.size(), 1u);
+  EXPECT_FALSE(mixed_regions[0].object_id_valid);
+  EXPECT_TRUE(mixed_regions[0].object_id_ambiguous);
+}
+
 TEST(DeformMonitorV2NodeAblationTest, ResetReferencePublishesEmptyOutputsWhenAblationsAreEnabled) {
   EnsureRosInitialized();
   if (!ros::master::check()) {
@@ -269,7 +515,11 @@ TEST(DeformMonitorV2NodeAblationTest, ResetReferencePublishesEmptyOutputsWhenAbl
   private_nh.setParam("deform_monitor/ablation/disable_drift_compensation", true);
 
   DeformMonitorV2Node node;
+  const uint32_t previous_epoch = node.reference_epoch_id_;
+  node.reference_initialized_stamp_ = ros::Time(10, 0);
   EXPECT_NO_FATAL_FAILURE(node.ResetReferenceCallback(std_msgs::EmptyConstPtr()));
+  EXPECT_EQ(node.reference_epoch_id_, previous_epoch + 1u);
+  EXPECT_TRUE(node.reference_initialized_stamp_.isZero());
 }
 
 }  // namespace deform_monitor_v2

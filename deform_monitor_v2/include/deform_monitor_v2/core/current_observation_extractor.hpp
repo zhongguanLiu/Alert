@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #ifndef DEFORM_MONITOR_V2_CORE_CURRENT_OBSERVATION_EXTRACTOR_HPP
 #define DEFORM_MONITOR_V2_CORE_CURRENT_OBSERVATION_EXTRACTOR_HPP
 
@@ -20,6 +14,7 @@ public:
   void SetCovarianceParams(const CovarianceParams& params);
   void SetObservabilityParams(const ObservabilityParams& params);
   void SetMeasurementBuilder(const ScalarMeasurementBuilder& builder);
+  void SetObjectAssociationParams(const ObjectAssociationParams& params);
 
   void PrepareSingleFrame(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr& curr_cloud,
                           const PoseCov6D& curr_pose_cov,
@@ -28,7 +23,8 @@ public:
   CurrentObservation ExtractForAnchorFromPreparedCache(
       const AnchorReference& anchor,
       const PoseCov6D& pose_cov,
-      const Eigen::Vector3d& lidar_origin_R) const;
+      const Eigen::Vector3d& lidar_origin_R,
+      const Eigen::Vector3d& predicted_displacement_R) const;
 
 private:
   struct VoxelKey {
@@ -55,6 +51,7 @@ private:
     AlignedVector<Eigen::Vector3d> points_R;
     AlignedVector<Eigen::Matrix3d> point_covariances;
     std::vector<int> frame_indices;
+    std::vector<float> object_id_samples;
     std::vector<PoseCov6D> frame_pose_covs;
     std::vector<Eigen::Vector3d> frame_origins_R;
     double window_span_sec = 0.0;
@@ -64,6 +61,7 @@ private:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     AlignedVector<Eigen::Vector3d> points_R;
     AlignedVector<Eigen::Matrix3d> point_covariances;
+    std::vector<float> object_id_samples;
     Eigen::Vector3d sum_R = Eigen::Vector3d::Zero();
     int total_points = 0;
   };
@@ -96,7 +94,8 @@ private:
       const ObservationFrameDeque& frames);
   LocalSupportData BuildSupportForAnchorFromCachedMaps(
       const AnchorReference& anchor,
-      const Eigen::Vector3d& lidar_origin_R) const;
+      const Eigen::Vector3d& lidar_origin_R,
+      const Eigen::Vector3d& predicted_displacement_R) const;
 
   FrameVoxelMap BuildFrameVoxelMap(const ObservationFrame& frame) const;
   void EnsureWindowVoxelMaps(const ObservationFrameDeque& frames);
@@ -110,6 +109,7 @@ private:
   NoiseParams noise_params_;
   CovarianceParams covariance_params_;
   ObservabilityParams observability_params_;
+  ObjectAssociationParams object_association_params_;
   ScalarMeasurementBuilder measurement_builder_;
   AlignedDeque<FrameVoxelMap> cached_frame_voxel_maps_;
 };

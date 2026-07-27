@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #ifndef DEFORM_MONITOR_V2_CORE_ANCHOR_BUILDER_HPP
 #define DEFORM_MONITOR_V2_CORE_ANCHOR_BUILDER_HPP
 
@@ -14,6 +8,7 @@ namespace deform_monitor_v2 {
 class AnchorBuilder {
 public:
   void SetParams(const AnchorBuildParams& params);
+  void SetObjectAssociationParams(const ObjectAssociationParams& params);
   AnchorReferenceVector BuildFrozenAnchors(
       const ReferenceInitFrameVector& init_frames);
 
@@ -28,6 +23,7 @@ public:
 
 private:
   AnchorBuildParams params_;
+  ObjectAssociationParams object_association_params_;
 };
 
 }  // namespace deform_monitor_v2

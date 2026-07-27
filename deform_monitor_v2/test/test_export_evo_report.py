@@ -1,13 +1,3 @@
-# Author: zgliu@cumt.edu.cn
-# Affiliation: China University of Mining and Technology
-# Open-source release date: 2026-04-20
-"""Unit tests for export_evo_report.py.
-
-The fixed timestamps and metric values in this file are synthetic parser and
-formatter fixtures. They exist only to verify EVO text parsing and report
-layout, and they do not represent benchmark or paper results.
-"""
-
 import importlib.util
 import pathlib
 import shlex
@@ -153,9 +143,6 @@ class ExportEvoReportTests(unittest.TestCase):
         if module is None:
             self.fail(f"Missing implementation script: {SCRIPT_PATH}")
 
-        # These values intentionally resemble realistic EVO outputs so the
-        # formatter is tested against representative text, but they are still
-        # synthetic fixtures rather than recorded experiment data.
         tum_summary = module.TumSummary(
             sample_count=382,
             start_time=2435.210714996,
@@ -198,49 +185,49 @@ class ExportEvoReportTests(unittest.TestCase):
             t_max_diff=0.001,
             alignment_mode="origin_alignment",
             rpe_delta=1,
-            notes=["test note"],
+            notes=["测试备注"],
         )
 
-        self.assertIn("EVO Trajectory Report", report_text)
-        self.assertIn("1. Basic Info", report_text)
-        self.assertIn("Run Dir: /tmp/sim_run_000", report_text)
-        self.assertIn("Generated: 2026-03-31T02:00:00", report_text)
+        self.assertIn("EVO 轨迹评测报告", report_text)
+        self.assertIn("一、基本信息", report_text)
+        self.assertIn("运行目录：/tmp/sim_run_000", report_text)
+        self.assertIn("生成时间：2026-03-31T02:00:00", report_text)
         self.assertIn("t_max_diff：0.001000 s", report_text)
-        self.assertIn("Align Mode: origin_alignment", report_text)
+        self.assertIn("对齐模式：origin_alignment", report_text)
         self.assertIn("RPE delta：1", report_text)
-        self.assertIn("2. Input Trajectories", report_text)
+        self.assertIn("二、输入轨迹", report_text)
         self.assertIn("GT TUM：/tmp/gt.tum", report_text)
-        self.assertIn("Odom TUM: /tmp/odom.tum", report_text)
-        self.assertIn("3. Trajectory Summary", report_text)
-        self.assertIn("TUM Samples: 382", report_text)
-        self.assertIn("Duration: 38.098425003 s", report_text)
-        self.assertIn("4. APE Translation Error", report_text)
-        self.assertIn("5. RPE Translation Error", report_text)
+        self.assertIn("里程计 TUM：/tmp/odom.tum", report_text)
+        self.assertIn("三、轨迹概况", report_text)
+        self.assertIn("TUM 样本数：382", report_text)
+        self.assertIn("持续时间：38.098425003 s", report_text)
+        self.assertIn("四、APE 平移误差", report_text)
+        self.assertIn("五、RPE 平移误差", report_text)
         self.assertIn("SSE：0.001896 m^2", report_text)
         self.assertIn("SSE：0.000206 m^2", report_text)
-        self.assertIn("6. Figures", report_text)
-        self.assertIn("Trajectory Plot: /tmp/traj_overlay_xy.png", report_text)
-        self.assertIn("APE Plot: /tmp/ape_trans_error.png", report_text)
-        self.assertIn("RPE Plot: /tmp/rpe_trans_1f_error.png", report_text)
-        self.assertIn("7. Repro Commands", report_text)
-        self.assertIn("The commands below reproduce the exported outputs.", report_text)
+        self.assertIn("六、图像文件", report_text)
+        self.assertIn("轨迹叠加图：/tmp/traj_overlay_xy.png", report_text)
+        self.assertIn("APE 图像：/tmp/ape_trans_error.png", report_text)
+        self.assertIn("RPE 图像：/tmp/rpe_trans_1f_error.png", report_text)
+        self.assertIn("七、复现命令（发布产物路径）", report_text)
+        self.assertIn("以下命令用于复现已发布产物", report_text)
         self.assertIn(
-            "Trajectory Cmd: evo_traj tum /tmp/gt.tum /tmp/odom.tum --ref /tmp/gt.tum --sync --align_origin --t_max_diff 0.001 --plot_mode xy --save_plot /tmp/traj_overlay_xy.png",
+            "轨迹叠加命令：evo_traj tum /tmp/gt.tum /tmp/odom.tum --ref /tmp/gt.tum --sync --align_origin --t_max_diff 0.001 --plot_mode xy --save_plot /tmp/traj_overlay_xy.png",
             report_text,
         )
         self.assertIn(
-            "APE Cmd: evo_ape tum /tmp/gt.tum /tmp/odom.tum --align_origin -r trans_part --t_max_diff 0.001 --save_plot /tmp/ape_trans_error.png",
+            "APE 命令：evo_ape tum /tmp/gt.tum /tmp/odom.tum --align_origin -r trans_part --t_max_diff 0.001 --save_plot /tmp/ape_trans_error.png",
             report_text,
         )
         self.assertIn(
-            "RPE Cmd: evo_rpe tum /tmp/gt.tum /tmp/odom.tum --align_origin -r trans_part -u f -d 1 --t_max_diff 0.001 --save_plot /tmp/rpe_trans_1f_error.png",
+            "RPE 命令：evo_rpe tum /tmp/gt.tum /tmp/odom.tum --align_origin -r trans_part -u f -d 1 --t_max_diff 0.001 --save_plot /tmp/rpe_trans_1f_error.png",
             report_text,
         )
         self.assertIn("RMSE：0.002228 m", report_text)
-        self.assertIn("8. Notes", report_text)
-        self.assertNotIn("3. APE Cmd", report_text)
-        self.assertNotIn("5. RPE Cmd", report_text)
-        self.assertNotIn("7. Param Notes", report_text)
+        self.assertIn("八、备注", report_text)
+        self.assertNotIn("三、APE 命令", report_text)
+        self.assertNotIn("五、RPE 命令", report_text)
+        self.assertNotIn("七、参数说明", report_text)
 
     def test_run_evo_command_sets_headless_backend_and_returns_stdout(self):
         module = load_module_if_exists()
@@ -455,15 +442,15 @@ class ExportEvoReportTests(unittest.TestCase):
             self.assertTrue(outputs.traj_plot_png.is_file())
             self.assertTrue(outputs.ape_plot_png.is_file())
             self.assertTrue(outputs.rpe_plot_png.is_file())
-            self.assertIn("EVO Trajectory Report", outputs.report_txt.read_text())
+            self.assertIn("EVO 轨迹评测报告", outputs.report_txt.read_text())
             self.assertIn("traj_overlay_xy.png", outputs.report_txt.read_text())
             self.assertIn("ape_trans_error.png", outputs.report_txt.read_text())
             self.assertIn("rpe_trans_1f_error.png", outputs.report_txt.read_text())
             self.assertIn("evo_ape", outputs.commands_txt.read_text())
             self.assertIn("'", outputs.commands_txt.read_text())
             self.assertIn("'", outputs.report_txt.read_text())
-            self.assertTrue(outputs.commands_txt.read_text().startswith("# Repro Commands"))
-            self.assertIn("# The commands below use the final output paths.", outputs.commands_txt.read_text())
+            self.assertTrue(outputs.commands_txt.read_text().startswith("# 复现命令（发布产物路径）"))
+            self.assertIn("以下命令引用最终输出路径，可直接用于复现已发布产物。", outputs.commands_txt.read_text())
             self.assertEqual(outputs.ape_stdout_txt.read_text(), stdout_by_tool["evo_ape"])
             self.assertEqual(outputs.rpe_stdout_txt.read_text(), stdout_by_tool["evo_rpe"])
 

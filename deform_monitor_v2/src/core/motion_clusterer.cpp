@@ -1,10 +1,6 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/motion_clusterer.hpp"
+
+#include "deform_monitor_v2/core/observable_subspace.hpp"
 
 #include <cmath>
 #include <limits>
@@ -81,6 +77,21 @@ double TimeCorrelation(const std::deque<double>& a, const std::deque<double>& b)
   return Clamp01(0.5 * (corr + 1.0));
 }
 
+ObjectAssociationState SummarizeAssociationState(int consistent_count,
+                                                 int mismatch_count,
+                                                 int mixed_count) {
+  if (mixed_count > 0) {
+    return ObjectAssociationState::MIXED;
+  }
+  if (mismatch_count > 0) {
+    return ObjectAssociationState::MISMATCH;
+  }
+  if (consistent_count > 0) {
+    return ObjectAssociationState::CONSISTENT;
+  }
+  return ObjectAssociationState::UNAVAILABLE;
+}
+
 }  // namespace
 
 void MotionClusterer::SetParams(const ClusterParams& params) {
@@ -98,8 +109,7 @@ MotionClusterVector MotionClusterer::Cluster(
   std::vector<size_t> active;
   active.reserve(anchors.size());
   for (size_t i = 0; i < anchors.size(); ++i) {
-    if (states[i].significant || states[i].persistent_candidate || states[i].disappearance_candidate ||
-        states[i].graph_candidate) {
+    if (states[i].significant || states[i].disappearance_candidate) {
       active.push_back(i);
     }
   }
@@ -138,8 +148,12 @@ MotionClusterVector MotionClusterer::Cluster(
         continue;
       }
 
-      const Eigen::Vector3d ui = states[i].x_mix.block<3, 1>(0, 0);
-      const Eigen::Vector3d uj = states[j].x_mix.block<3, 1>(0, 0);
+      const ObservableSubspace subspace_i = BuildObservableSubspace(anchors[i]);
+      const ObservableSubspace subspace_j = BuildObservableSubspace(anchors[j]);
+      const Eigen::Vector3d ui = ProjectObservableVector(
+          states[i].x_mix.block<3, 1>(0, 0), subspace_i, states[i].dof_obs);
+      const Eigen::Vector3d uj = ProjectObservableVector(
+          states[j].x_mix.block<3, 1>(0, 0), subspace_j, states[j].dof_obs);
       const double ni = ui.norm();
       const double nj = uj.norm();
       double dir_cos = 0.0;
@@ -165,7 +179,9 @@ MotionClusterVector MotionClusterer::Cluster(
 
       const bool disappear_pair =
           states[i].mode == DetectionMode::DISAPPEARANCE ||
-          states[j].mode == DetectionMode::DISAPPEARANCE;
+          states[j].mode == DetectionMode::DISAPPEARANCE ||
+          states[i].disappearance_candidate ||
+          states[j].disappearance_candidate;
       const double score = disappear_pair
                                ? 0.40 * std::exp(-(dist * dist) /
                                                  std::max(1.0e-6, params_.sigma_d * params_.sigma_d)) +
@@ -244,26 +260,114 @@ MotionClusterVector MotionClusterer::Cluster(
     Eigen::Vector3d sum_Wu = Eigen::Vector3d::Zero();
     Eigen::Vector3d weighted_center = Eigen::Vector3d::Zero();
     double center_weight_sum = 0.0;
+    uint16_t reference_object_id = 0;
+    bool reference_object_seen = false;
+    bool reference_object_complete = true;
+    bool reference_object_ambiguous = false;
+    double reference_object_confidence_sum = 0.0;
+    int reference_object_confidence_count = 0;
+    uint16_t observed_object_id = 0;
+    bool observed_object_seen = false;
+    bool observed_object_complete = true;
+    bool observed_object_ambiguous = false;
+    double observed_object_confidence_sum = 0.0;
+    int observed_object_confidence_count = 0;
 
     for (const size_t idx : group.second) {
       cluster.anchor_ids.push_back(anchors[idx].id);
       cluster.bbox_min_R = cluster.bbox_min_R.cwiseMin(anchors[idx].center_R);
       cluster.bbox_max_R = cluster.bbox_max_R.cwiseMax(anchors[idx].center_R);
-      if (states[idx].mode == DetectionMode::DISAPPEARANCE) {
+      if (states[idx].mode == DetectionMode::DISAPPEARANCE ||
+          states[idx].disappearance_candidate) {
         ++disappear_votes;
         disappear_score_sum += states[idx].disappearance_score;
       }
 
       const Eigen::Matrix3d Sigma_u = states[idx].P_mix.block<3, 3>(0, 0);
-      const Eigen::Matrix3d W = PseudoInverse(Sigma_u, 1.0e-9);
-      const Eigen::Vector3d u = states[idx].x_mix.block<3, 1>(0, 0);
+      const ObservableSubspace subspace = BuildObservableSubspace(anchors[idx]);
+      const int observable_rank = std::max(0, std::min(subspace.rank, states[idx].dof_obs));
+      Eigen::Matrix3d W = Eigen::Matrix3d::Zero();
+      Eigen::Vector3d u = Eigen::Vector3d::Zero();
+      if (observable_rank > 0) {
+        const auto basis = subspace.basis_R.leftCols(observable_rank);
+        const Eigen::MatrixXd projected_covariance = basis.transpose() * Sigma_u * basis;
+        W = basis * PseudoInverse(projected_covariance, 1.0e-9) * basis.transpose();
+        u = ProjectObservableVector(
+            states[idx].x_mix.block<3, 1>(0, 0), subspace, observable_rank);
+      }
       sum_W += W;
       sum_Wu += W * u;
 
       const double w_center = 1.0 / (Sigma_u.trace() + 1.0e-6);
       weighted_center += w_center * anchors[idx].center_R;
       center_weight_sum += w_center;
+
+      if (!anchors[idx].object_id_valid) {
+        reference_object_complete = false;
+      } else {
+        if (!reference_object_seen) {
+          reference_object_id = anchors[idx].object_id;
+          reference_object_seen = true;
+        } else if (reference_object_id != anchors[idx].object_id) {
+          reference_object_ambiguous = true;
+        }
+        reference_object_confidence_sum += Clamp01(anchors[idx].object_id_confidence);
+        ++reference_object_confidence_count;
+      }
+
+      if (!states[idx].observed_object_id_valid) {
+        observed_object_complete = false;
+      } else {
+        if (!observed_object_seen) {
+          observed_object_id = states[idx].observed_object_id;
+          observed_object_seen = true;
+        } else if (observed_object_id != states[idx].observed_object_id) {
+          observed_object_ambiguous = true;
+        }
+        observed_object_confidence_sum +=
+            Clamp01(states[idx].observed_object_id_confidence);
+        ++observed_object_confidence_count;
+      }
+
+      switch (states[idx].object_association_state) {
+        case ObjectAssociationState::CONSISTENT:
+          ++cluster.association_consistent_count;
+          break;
+        case ObjectAssociationState::MISMATCH:
+          ++cluster.association_mismatch_count;
+          break;
+        case ObjectAssociationState::MIXED:
+          ++cluster.association_mixed_count;
+          break;
+        case ObjectAssociationState::UNAVAILABLE:
+        default:
+          ++cluster.association_unavailable_count;
+          break;
+      }
     }
+
+    cluster.object_id = reference_object_id;
+    cluster.object_id_ambiguous = reference_object_ambiguous;
+    cluster.object_id_valid = reference_object_seen && reference_object_complete &&
+                              !reference_object_ambiguous;
+    cluster.object_id_confidence =
+        cluster.object_id_valid && reference_object_confidence_count > 0
+            ? Clamp01(reference_object_confidence_sum /
+                      static_cast<double>(reference_object_confidence_count))
+            : 0.0;
+    cluster.observed_object_id = observed_object_id;
+    cluster.observed_object_id_ambiguous = observed_object_ambiguous;
+    cluster.observed_object_id_valid = observed_object_seen && observed_object_complete &&
+                                       !observed_object_ambiguous;
+    cluster.observed_object_id_confidence =
+        cluster.observed_object_id_valid && observed_object_confidence_count > 0
+            ? Clamp01(observed_object_confidence_sum /
+                      static_cast<double>(observed_object_confidence_count))
+            : 0.0;
+    cluster.object_association_state = SummarizeAssociationState(
+        cluster.association_consistent_count,
+        cluster.association_mismatch_count,
+        cluster.association_mixed_count);
 
     cluster.mode = disappear_votes * 2 >= static_cast<int>(group.second.size())
                        ? DetectionMode::DISAPPEARANCE

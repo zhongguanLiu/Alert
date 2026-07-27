@@ -47,7 +47,7 @@ def main():
     rospy.init_node("mid360_work_patrol_cmd")
 
     patrol_mode = str(rospy.get_param("~patrol_mode", DEFAULT_PATROL_MODE)).strip() or DEFAULT_PATROL_MODE
-    linear_speed = float(rospy.get_param("~linear_speed", 0.3))
+    linear_speed = float(rospy.get_param("~linear_speed", 0.2))
     radius = float(rospy.get_param("~radius", 1.0))
     publish_rate = float(rospy.get_param("~publish_rate", 20.0))
     start_delay = float(rospy.get_param("~start_delay", 0.0))
