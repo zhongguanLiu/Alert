@@ -1,10 +1,6 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/anchor_builder.hpp"
+#include "deform_monitor_v2/core/edge_feature.hpp"
+#include "deform_monitor_v2/core/object_id_association.hpp"
 
 #include <Eigen/Eigenvalues>
 #include <pcl/kdtree/kdtree_flann.h>
@@ -12,7 +8,6 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
-#include <unordered_map>
 
 namespace deform_monitor_v2 {
 
@@ -82,6 +77,29 @@ struct AnchorCandidate {
   double score = 0.0;
 };
 
+void PopulateEdgeReference(const AlignedVector<Eigen::Vector3d>& local_points,
+                           const Eigen::Vector3d& support_center_R,
+                           const Eigen::Vector3d& edge_normal_R,
+                           AnchorReference* anchor) {
+  if (!anchor) {
+    return;
+  }
+  const EdgeFeatureGeometry edge =
+      ComputeEdgeFeatureGeometry(local_points, support_center_R, edge_normal_R);
+  if (!edge.valid) {
+    anchor->edge_center_R = support_center_R;
+    anchor->Sigma_ref_edge = anchor->Sigma_ref_geom;
+    return;
+  }
+
+  anchor->edge_center_R = edge.center_R;
+  anchor->Sigma_ref_edge =
+      edge.sample_cov / std::max(1.0, static_cast<double>(edge.point_indices.size()));
+  anchor->Sigma_ref_edge += Eigen::Matrix3d::Identity() * 1.0e-6;
+  anchor->Sigma_ref_edge =
+      0.5 * (anchor->Sigma_ref_edge + anchor->Sigma_ref_edge.transpose());
+}
+
 struct VoxelCell {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   int total_points = 0;
@@ -89,8 +107,23 @@ struct VoxelCell {
   int last_seen_frame = -1;
   Eigen::Vector3d sum = Eigen::Vector3d::Zero();
   AlignedVector<Eigen::Vector3d> points;
+  std::vector<float> object_id_samples;
   std::vector<uint16_t> frames_seen;
 };
+
+void ApplyObjectAssociation(const VoxelCell& cell,
+                            const ObjectAssociationParams& params,
+                            AnchorReference* anchor) {
+  if (!anchor) {
+    return;
+  }
+  const ObjectIdAssociationResult association =
+      AssociateObjectIdSamples(cell.object_id_samples, params);
+  anchor->object_id = association.object_id;
+  anchor->object_id_valid = association.valid;
+  anchor->object_id_confidence = association.confidence;
+  anchor->object_id_support_count = association.support_count;
+}
 
 SupportStats ComputeSupportStats(const AlignedVector<Eigen::Vector3d>& points,
                                  const Eigen::Vector3d& center_seed,
@@ -217,6 +250,10 @@ void AnchorBuilder::SetParams(const AnchorBuildParams& params) {
   params_ = params;
 }
 
+void AnchorBuilder::SetObjectAssociationParams(const ObjectAssociationParams& params) {
+  object_association_params_ = params;
+}
+
 AnchorReferenceVector AnchorBuilder::BuildFrozenAnchors(const ReferenceInitFrameVector& init_frames) {
   AnchorReferenceVector anchors;
   if (init_frames.empty()) {
@@ -253,6 +290,9 @@ AnchorReferenceVector AnchorBuilder::BuildFrozenAnchors(const ReferenceInitFrame
       const Eigen::Vector3d p(pt.x, pt.y, pt.z);
       cell.sum += p;
       cell.points.push_back(p);
+      if (object_association_params_.enable) {
+        cell.object_id_samples.push_back(pt.intensity);
+      }
       ++cell.total_points;
       if (cell.last_seen_frame != static_cast<int>(frame_idx)) {
         cell.last_seen_frame = static_cast<int>(frame_idx);
@@ -264,7 +304,7 @@ AnchorReferenceVector AnchorBuilder::BuildFrozenAnchors(const ReferenceInitFrame
   }
 
   if (voxels.empty() || frame_origins.empty()) {
-    std::cout << "[deform_monitor_v2] Reference init failed: empty cloud." << std::endl;
+    std::cout << "[微动监测V2] 参考初始化失败: 初始化点云为空，无法构建锚单元" << std::endl;
     return anchors;
   }
 
@@ -278,15 +318,15 @@ AnchorReferenceVector AnchorBuilder::BuildFrozenAnchors(const ReferenceInitFrame
     stable_keys.push_back(kv.first);
   }
   if (stable_keys.empty()) {
-    std::cout << "[deform_monitor_v2] Reference init failed: no stable voxels." << std::endl;
+    std::cout << "[微动监测V2] 参考初始化失败: 没有稳定占据体素可生成锚单元" << std::endl;
     return anchors;
   }
 
-  std::cout << "[deform_monitor_v2] Build frozen anchors: init_frames="
+  std::cout << "[微动监测V2] 开始构建冻结参考锚单元: 初始化帧="
             << init_frames.size()
-            << " voxels=" << voxels.size()
-            << " stable=" << stable_keys.size()
-            << " points=" << total_points << std::endl;
+            << " 体素数=" << voxels.size()
+            << " 稳定体素数=" << stable_keys.size()
+            << " 聚合点数=" << total_points << std::endl;
 
   anchors.reserve(stable_keys.size());
   size_t processed_voxels = 0;
@@ -294,7 +334,7 @@ AnchorReferenceVector AnchorBuilder::BuildFrozenAnchors(const ReferenceInitFrame
   for (const auto& key : stable_keys) {
     ++processed_voxels;
     if (processed_voxels % 500 == 0) {
-      std::cout << "[deform_monitor_v2] Ref init progress: voxel="
+      std::cout << "[微动监测V2] 参考初始化进度: voxel="
                 << processed_voxels << "/" << stable_keys.size()
                 << " anchors=" << anchors.size() << std::endl;
     }
@@ -411,29 +451,21 @@ AnchorReferenceVector AnchorBuilder::BuildFrozenAnchors(const ReferenceInitFrame
         std::max(min_points_per_voxel, static_cast<int>(std::round(avg_local_support)));
     anchor.point_count = static_cast<int>(local_points.size());
 
-    anchor.edge_center_R = Eigen::Vector3d::Zero();
-    int edge_count = 0;
-    for (const auto& p : local_points) {
-      if (e1.dot(p - anchor.center_R) > 0.0) {
-        anchor.edge_center_R += p;
-        ++edge_count;
-      }
-    }
-    if (edge_count > 0) {
-      anchor.edge_center_R /= static_cast<double>(edge_count);
-    } else {
-      anchor.edge_center_R = anchor.center_R;
-    }
+    PopulateEdgeReference(local_points, support_stats.center, e1, &anchor);
     anchor.band_center_R = anchor.center_R;
     anchor.visible_count = local_visible_frames;
     anchor.matched_count = 0;
     anchor.covariance_quality = covariance_quality;
     anchor.type_stability = type_stability;
+    anchor.shape_linearity = support_stats.linearity;
+    anchor.shape_planarity = support_stats.planarity;
+    anchor.shape_scattering = support_stats.scattering;
     anchor.frozen = true;
+    ApplyObjectAssociation(cell, object_association_params_, &anchor);
     anchors.push_back(anchor);
   }
 
-  std::cout << "[deform_monitor_v2] Frozen anchors done: anchors=" << anchors.size()
+  std::cout << "[微动监测V2] 冻结参考锚单元构建结束: anchors=" << anchors.size()
             << " / stable_voxels=" << stable_keys.size()
             << " / total_voxels=" << voxels.size() << std::endl;
 
@@ -465,7 +497,7 @@ AnchorReferenceVector AnchorBuilder::BuildFrozenAnchors(const ReferenceInitFrame
       }
     }
     const double inv_n = 1.0 / static_cast<double>(anchors.size());
-    std::cout << "[deform_monitor_v2] Anchor quality summary:"
+    std::cout << "[微动监测V2] 参考锚质量摘要:"
               << " mean_visible=" << mean_visible * inv_n
               << " mean_points=" << mean_points * inv_n
               << " mean_cov_q=" << mean_cov_q * inv_n
@@ -549,6 +581,9 @@ AnchorReferenceVector AnchorBuilder::BuildIncrementalAnchors(
       const Eigen::Vector3d p(pt.x, pt.y, pt.z);
       cell.sum += p;
       cell.points.push_back(p);
+      if (object_association_params_.enable) {
+        cell.object_id_samples.push_back(pt.intensity);
+      }
       ++cell.total_points;
       if (cell.last_seen_frame != static_cast<int>(frame_idx)) {
         cell.last_seen_frame = static_cast<int>(frame_idx);
@@ -706,32 +741,24 @@ AnchorReferenceVector AnchorBuilder::BuildIncrementalAnchors(
         std::max(min_points_per_voxel, static_cast<int>(std::round(avg_local_support)));
     anchor.point_count = static_cast<int>(local_points.size());
 
-    anchor.edge_center_R = Eigen::Vector3d::Zero();
-    int edge_count = 0;
-    for (const auto& p : local_points) {
-      if (e1.dot(p - anchor.center_R) > 0.0) {
-        anchor.edge_center_R += p;
-        ++edge_count;
-      }
-    }
-    if (edge_count > 0) {
-      anchor.edge_center_R /= static_cast<double>(edge_count);
-    } else {
-      anchor.edge_center_R = anchor.center_R;
-    }
+    PopulateEdgeReference(local_points, support_stats.center, e1, &anchor);
     anchor.band_center_R = anchor.center_R;
     anchor.visible_count = local_visible_frames;
     anchor.matched_count = 0;
     anchor.covariance_quality = covariance_quality;
     anchor.type_stability = type_stability;
+    anchor.shape_linearity = support_stats.linearity;
+    anchor.shape_planarity = support_stats.planarity;
+    anchor.shape_scattering = support_stats.scattering;
     anchor.frozen = true;
+    ApplyObjectAssociation(cell, object_association_params_, &anchor);
     anchors.push_back(anchor);
   }
 
   if (!anchors.empty()) {
-    std::cout << "[deform_monitor_v2] Incremental anchors: added=" << anchors.size()
-              << " uncovered=" << stable_keys.size()
-              << " frames=" << recent_frames.size() << std::endl;
+    std::cout << "[微动监测V2] 增量锚点构建: 新增=" << anchors.size()
+              << " 未覆盖稳定体素=" << stable_keys.size()
+              << " 累积帧=" << recent_frames.size() << std::endl;
   }
 
   return anchors;

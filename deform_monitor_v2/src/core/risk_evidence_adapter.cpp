@@ -1,10 +1,6 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/risk_evidence_adapter.hpp"
+
+#include "deform_monitor_v2/core/observable_subspace.hpp"
 
 #include <algorithm>
 
@@ -25,9 +21,17 @@ double Max3(double a, double b, double c) {
 void RiskEvidenceAdapter::SetParams(const RiskVisualizationParams& risk_params,
                                     const SignificanceParams& significance_params,
                                     const GraphTemporalParams& graph_params) {
+  SetParams(risk_params, significance_params, graph_params, WeakPlaneMotionParams());
+}
+
+void RiskEvidenceAdapter::SetParams(const RiskVisualizationParams& risk_params,
+                                    const SignificanceParams& significance_params,
+                                    const GraphTemporalParams& graph_params,
+                                    const WeakPlaneMotionParams& weak_plane_params) {
   risk_params_ = risk_params;
   significance_params_ = significance_params;
   graph_params_ = graph_params;
+  weak_plane_params_ = weak_plane_params;
 }
 
 RiskEvidenceVector RiskEvidenceAdapter::Build(
@@ -46,10 +50,21 @@ RiskEvidenceVector RiskEvidenceAdapter::Build(
     RiskEvidenceState evidence;
     evidence.id = anchor.id;
     evidence.anchor_type = anchor.type;
+    evidence.object_id = anchor.object_id;
+    evidence.object_id_valid = anchor.object_id_valid;
+    evidence.object_id_confidence = anchor.object_id_confidence;
+    evidence.observed_object_id = obs.observed_object_id;
+    evidence.observed_object_id_valid = obs.observed_object_id_valid;
+    evidence.observed_object_id_confidence = obs.observed_object_id_confidence;
+    evidence.observed_object_id_support_count = obs.observed_object_id_support_count;
+    evidence.object_association_state = obs.object_association_state;
     evidence.obs_state = state.gate_state;
     evidence.mode = state.mode;
     evidence.position_R = anchor.center_R;
-    evidence.displacement_R = state.x_mix.block<3, 1>(0, 0);
+    evidence.displacement_R = ProjectObservableVector(
+        state.x_mix.block<3, 1>(0, 0),
+        BuildObservableSubspace(anchor),
+        state.dof_obs);
     evidence.graph_neighbor_count = state.graph_neighbor_count;
     evidence.observable = state.observable;
     evidence.comparable = state.comparable;
@@ -65,6 +80,21 @@ RiskEvidenceVector RiskEvidenceAdapter::Build(
                                  : Max3(amp_norm, amp_normal, amp_edge);
     const double chi2_score = Clamp01(state.chi2_stat / 25.0);
     evidence.displacement_score = Clamp01(0.55 * amp_score + 0.45 * chi2_score);
+    if (state.weak_plane_candidate) {
+      const double weak_amplitude = Clamp01(
+          state.weak_plane_group_disp /
+          std::max(1.0e-6, weak_plane_params_.min_group_disp));
+      const double weak_statistical = Clamp01(
+          state.weak_plane_mean_chi2 /
+          std::max(1.0e-6, weak_plane_params_.min_mean_chi2));
+      const double weak_support = Clamp01(
+          static_cast<double>(state.weak_plane_group_size) /
+          std::max(1, weak_plane_params_.min_support));
+      const double weak_score = Clamp01(
+          0.35 * weak_amplitude + 0.25 * weak_statistical +
+          0.20 * weak_support + 0.20 * state.weak_plane_direction_consistency);
+      evidence.displacement_score = std::max(evidence.displacement_score, weak_score);
+    }
 
     const double disappear_base = Clamp01(state.disappearance_score);
     const double disappear_boost =
@@ -77,6 +107,14 @@ RiskEvidenceVector RiskEvidenceAdapter::Build(
         Clamp01(state.graph_persistence_score / std::max(1.0e-6, graph_params_.cusum_h));
     evidence.graph_score =
         Clamp01(0.35 * graph_support + 0.35 * graph_temporal + 0.30 * graph_persistent);
+    if (state.weak_plane_candidate) {
+      const double streak_score = Clamp01(
+          static_cast<double>(state.weak_plane_streak) /
+          std::max(1, weak_plane_params_.min_streak));
+      const double weak_temporal_score = Clamp01(
+          0.60 * state.weak_plane_direction_consistency + 0.40 * streak_score);
+      evidence.graph_score = std::max(evidence.graph_score, weak_temporal_score);
+    }
 
     const double ref_conf =
         Clamp01(0.40 * anchor.ref_quality +
@@ -103,9 +141,7 @@ RiskEvidenceVector RiskEvidenceAdapter::Build(
         evidence.observable &&
         evidence.confidence >= risk_params_.min_confidence &&
         evidence.risk_score >= risk_params_.min_risk_score &&
-        (state.significant || state.persistent_candidate || state.disappearance_candidate ||
-         state.graph_candidate || evidence.displacement_score > 0.25 ||
-         evidence.disappearance_score > 0.25);
+        (state.significant || state.disappearance_candidate);
 
     evidences.push_back(evidence);
   }

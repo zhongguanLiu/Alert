@@ -4,32 +4,6 @@
   <strong>LiDAR Early Warning of Structural Deformation for Robotic Rescue</strong>
 </p>
 
-<p align="center">
-  <img alt="ROS Noetic" src="https://img.shields.io/badge/ROS-Noetic-22314E?logo=ros">
-  <img alt="Ubuntu 20.04" src="https://img.shields.io/badge/Ubuntu-20.04-E95420?logo=ubuntu&logoColor=white">
-  <img alt="C++14" src="https://img.shields.io/badge/C%2B%2B-14-00599C?logo=c%2B%2B">
-  <img alt="Python 3" src="https://img.shields.io/badge/Python-3-3776AB?logo=python&logoColor=white">
-  <img alt="License MIT" src="https://img.shields.io/badge/License-MIT-2ea44f">
-</p>
-
-<p align="center">
-  <img src="docs/assets/system_overview.png" alt="ALERT system overview" width="920">
-</p>
-
-## Demo Video
-
-<p align="center">
-  <a href="https://zhongguanliu.github.io/Alert/demo_video.html">
-    <img src="docs/assets/real_dog.jpg" alt="ALERT demo video" width="760">
-  </a>
-</p>
-
-<p align="center">
-  Click the cover image to open the demo video page.
-</p>
-
-This video shows a typical collapse scene in a confined space. In this run, two severe collapse events occur one after another, which makes it a representative example for demonstrating the ALERT system.
-
 ## 1. Overview
 
 Secondary collapse is a major operational hazard in post-disaster rescue, where subtle local structural responses may precede abrupt failure. ALERT is an onboard LiDAR-based perception and warning framework for mobile rescue robots. Instead of using LiDAR only for mapping and localization, ALERT focuses on online structural-risk perception under weak references, platform motion, sparse non-repetitive scanning, and partial observability.
@@ -42,9 +16,9 @@ This repository is organized as a catkin source space and includes the following
 | --- | --- |
 | `deform_monitor_v2/` | Core ALERT package: anchor modeling, estimation, risk verification, visualization, and recorders |
 | `FAST_LIO/` | LiDAR-inertial odometry backend used as the upstream pose and covariance source |
-| `livox_ros_driver/` | ROS driver for Livox sensors |
 | `gazebo_test/Mid360_simulation_plugin/livox_laser_simulation/` | Gazebo-based Livox simulation package and launch flow |
-| `analysis_script/` | Offline analysis and figure-generation utilities |
+
+`livox_ros_driver` remains an external build and runtime dependency and must be installed separately in the catkin workspace.
 
 ## 2. Dependencies
 
@@ -53,7 +27,7 @@ This repository is organized as a catkin source space and includes the following
 - Ubuntu 20.04
 - ROS Noetic
 - Gazebo 11
-- GCC / G++ with C++14 support
+- GCC / G++ with C++17 support
 - Python 3
 
 ### System packages
@@ -91,6 +65,9 @@ This repository is intended to be used as the `src/` directory of a catkin works
 ```bash
 mkdir -p ~/alert_ws
 git clone https://github.com/zhongguanLiu/Alert.git ~/alert_ws/src
+git clone https://github.com/Livox-SDK/livox_ros_driver.git ~/alert_ws/src/livox_ros_driver
+cd ~/alert_ws/src
+catkin_init_workspace
 cd ~/alert_ws
 source /opt/ros/noetic/setup.bash
 catkin_make
@@ -108,11 +85,7 @@ This keeps runtime artifacts out of the source tree and makes the repository por
 
 ### Simulation asset note
 
-I did not include the Gazebo scan-pattern files and mesh assets in this repository because they are relatively large and would make the public code release unnecessarily heavy.
-
-As a result, this repository is sufficient for reading the code, building the main packages, and understanding the full pipeline, but the Gazebo simulation will not run out of the box unless those assets are restored locally.
-
-If you need the simulation assets for reproduction, please open an Issue in this repository and I can provide them separately.
+The repository contains only the Mid360 scan pattern, meshes, and world used by the ALERT simulation. Scan patterns and models for other LiDAR variants are intentionally excluded.
 
 ## 3. Build & Run
 

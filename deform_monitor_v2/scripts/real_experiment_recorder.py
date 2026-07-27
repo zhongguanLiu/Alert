@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Author: zgliu@cumt.edu.cn
-# Affiliation: China University of Mining and Technology
-# Open-source release date: 2026-04-20
 """
 real_experiment_recorder.py  —  ALERT recorder for real-world robot runs.
 
@@ -31,6 +28,7 @@ import math
 import pathlib
 import re
 import sys
+import threading
 
 # ── Shared serialisation helpers from sim_experiment_recorder ─────────────────
 # Both scripts live in the same scripts/ directory; add it to sys.path so
@@ -143,6 +141,8 @@ class RealExperimentRecorder:
 
         # ── Internal state ──────────────────────────────────────────────────────
         self._algorithm_files = {}           # key → open file handle
+        self._algorithm_files_lock = threading.Lock()
+        self._closing = False
         self._persistent_track_cache = {}    # track_id → lifecycle dict
         self._latest_cluster_payload = None  # most recent clusters payload
         self._DISP_WINDOW_HALF = 3
@@ -224,13 +224,19 @@ class RealExperimentRecorder:
         })
 
     def _append_jsonl(self, key, filename, payload):
-        handle = self._algorithm_files.get(key)
-        if handle is None:
-            handle = (self.algorithm_dir / filename).open("a")
-            self._algorithm_files[key] = handle
-        json.dump(payload, handle, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
+        # rospy may execute callbacks from different topic connection threads.
+        # Serialize file access with shutdown so an in-flight callback cannot
+        # write to a handle after close() has closed it.
+        with self._algorithm_files_lock:
+            if self._closing:
+                return
+            handle = self._algorithm_files.get(key)
+            if handle is None:
+                handle = (self.algorithm_dir / filename).open("a")
+                self._algorithm_files[key] = handle
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
 
     # ── Displacement-window helpers ────────────────────────────────────────────
 
@@ -502,9 +508,11 @@ class RealExperimentRecorder:
         self._append_jsonl("anchor_states", "anchor_states.jsonl", payload)
 
     def close(self):
-        for handle in self._algorithm_files.values():
-            handle.close()
-        self._algorithm_files = {}
+        with self._algorithm_files_lock:
+            self._closing = True
+            for handle in self._algorithm_files.values():
+                handle.close()
+            self._algorithm_files = {}
 
 
 def main():

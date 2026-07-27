@@ -15,6 +15,9 @@ DEBRIS_LAUNCH_PATH = (
     / "launch"
     / "debris_block_02_motion.launch"
 )
+FAST_LIO_ROOT = pathlib.Path(__file__).resolve().parents[4] / "FAST_LIO"
+FAST_LIO_LAUNCH_PATH = FAST_LIO_ROOT / "launch" / "mapping_mid360.launch"
+FAST_LIO_SOURCE_PATH = FAST_LIO_ROOT / "src" / "laserMapping.cpp"
 
 
 class Mid360FastlioLaunchWorkPatrolTests(unittest.TestCase):
@@ -26,6 +29,18 @@ class Mid360FastlioLaunchWorkPatrolTests(unittest.TestCase):
         self.assertNotIn("work_patrol_radius", arg_names)
         self.assertNotIn("work_patrol_linear_speed", arg_names)
         self.assertNotIn("work_patrol_start_delay", arg_names)
+
+    def test_mid360_launch_spawns_robot_missing_from_default_world(self):
+        root = ET.parse(MID360_LAUNCH_PATH).getroot()
+        args = {elem.attrib.get("name"): elem.attrib for elem in root.findall("arg")}
+        self.assertEqual(args["spawn_robot"].get("default"), "true")
+
+        spawn_node = next(
+            node
+            for node in root.findall("node")
+            if node.attrib.get("name") == "spawn_mid360_fastlio"
+        )
+        self.assertEqual(spawn_node.attrib.get("if"), "$(arg spawn_robot)")
 
     def test_mid360_launch_keeps_keyboard_gate_without_work_patrol_dependency(self):
         tree = ET.parse(MID360_LAUNCH_PATH)
@@ -41,6 +56,35 @@ class Mid360FastlioLaunchWorkPatrolTests(unittest.TestCase):
             keyboard_node.attrib.get("if"),
             "$(eval arg('keyboard_teleop') and not arg('auto_drive'))",
         )
+
+    def test_mid360_launch_does_not_claim_to_throttle_gazebo_state_topics(self):
+        tree = ET.parse(MID360_LAUNCH_PATH)
+        root = tree.getroot()
+        parameter_names = {
+            element.attrib.get("name") for element in root.findall("param")
+        }
+        self.assertNotIn("gazebo/publish_period", parameter_names)
+
+    def test_fast_lio_formal_launch_disables_detailed_runtime_logs(self):
+        root = ET.parse(FAST_LIO_LAUNCH_PATH).getroot()
+        args = {element.attrib["name"]: element.attrib for element in root.findall("arg")}
+        params = {element.attrib["name"]: element.attrib for element in root.findall("param")}
+        self.assertEqual(args["runtime_pos_log_enable"].get("default"), "false")
+        self.assertEqual(
+            args["runtime_performance_log_enable"].get("default"), "false"
+        )
+        self.assertEqual(
+            params["runtime_pos_log_enable"].get("value"),
+            "$(arg runtime_pos_log_enable)",
+        )
+        self.assertEqual(
+            params["runtime_performance_log_enable"].get("value"),
+            "$(arg runtime_performance_log_enable)",
+        )
+
+        source = FAST_LIO_SOURCE_PATH.read_text()
+        self.assertIn('nh.param<bool>("runtime_performance_log_enable"', source)
+        self.assertIn("if (runtime_performance_log)", source)
 
 
 class DebrisMotionLaunchWorkPatrolTests(unittest.TestCase):
@@ -87,56 +131,84 @@ class DebrisMotionLaunchWorkPatrolTests(unittest.TestCase):
         tree = ET.parse(DEBRIS_LAUNCH_PATH)
         root = tree.getroot()
         args = {elem.attrib.get("name"): elem.attrib for elem in root.findall("arg")}
-        removed_arg_prefix = "model_" "03_"
 
         self.assertEqual(args["control_mode"].get("default"), "single")
-        self.assertEqual(args["model_01_name"].get("default"), "model_01")
-        self.assertEqual(args["model_02_name"].get("default"), "model_02")
-        self.assertEqual(args["model_01_command_frame"].get("default"), "world")
-        self.assertEqual(args["model_02_command_frame"].get("default"), "world")
-        self.assertEqual(args["model_01_linear_y"].get("default"), "$(arg linear_y)")
-        self.assertEqual(args["model_02_linear_x"].get("default"), "$(arg linear_y)")
-        self.assertFalse(
-            any(name.startswith(removed_arg_prefix) for name in args),
-        )
+        for index in range(1, 5):
+            prefix = f"model_{index:02d}"
+            with self.subTest(model=prefix):
+                self.assertEqual(args[f"{prefix}_name"].get("default"), prefix)
+                self.assertEqual(
+                    args[f"{prefix}_node_name"].get("default"),
+                    f"{prefix}_motion",
+                )
+                self.assertEqual(
+                    args[f"{prefix}_command_frame"].get("default"), "world"
+                )
+                self.assertEqual(args[f"{prefix}_enabled"].get("default"), "true")
+                for component in ("x", "y", "z"):
+                    self.assertEqual(
+                        args[f"{prefix}_linear_{component}"].get("default"), "0.0"
+                    )
+                    self.assertEqual(
+                        args[f"{prefix}_angular_{component}_deg"].get("default"),
+                        "0.0",
+                    )
+                self.assertEqual(
+                    args[f"{prefix}_start_delay"].get("default"),
+                    "$(arg start_delay)",
+                )
+                self.assertEqual(
+                    args[f"{prefix}_duration"].get("default"), "$(arg duration)"
+                )
+                self.assertEqual(
+                    args[f"{prefix}_scenario_id"].get("default"),
+                    "$(arg scenario_id)",
+                )
 
     def test_debris_launch_includes_multi_motion_nodes(self):
         tree = ET.parse(DEBRIS_LAUNCH_PATH)
         root = tree.getroot()
 
         nodes = {node.attrib.get("name"): node for node in root.findall("node")}
-        removed_node_name = "model_" "03_node_name"
         self.assertEqual(
             nodes["$(arg node_name)"].attrib.get("if"),
             "$(eval arg('control_mode') == 'single')",
         )
 
-        model_01_node = nodes["$(arg model_01_node_name)"]
-        model_02_node = nodes["$(arg model_02_node_name)"]
-        self.assertNotIn("$(arg " + removed_node_name + ")", nodes)
-
-        for node in (model_01_node, model_02_node):
-            self.assertEqual(node.attrib.get("type"), "model_motion_controller.py")
-            self.assertEqual(node.attrib.get("if"), "$(eval arg('control_mode') == 'multi')")
-
-        model_01_params = {
-            elem.attrib.get("name"): elem.attrib.get("value")
-            for elem in model_01_node.findall("param")
-        }
-        model_02_params = {
-            elem.attrib.get("name"): elem.attrib.get("value")
-            for elem in model_02_node.findall("param")
-        }
-
-        self.assertEqual(model_01_params["model_name"], "$(arg model_01_name)")
-        self.assertEqual(model_01_params["command_frame"], "$(arg model_01_command_frame)")
-        self.assertEqual(model_01_params["linear_y"], "$(arg model_01_linear_y)")
-        self.assertEqual(model_01_params["angular_y_deg"], "0.0")
-
-        self.assertEqual(model_02_params["model_name"], "$(arg model_02_name)")
-        self.assertEqual(model_02_params["command_frame"], "$(arg model_02_command_frame)")
-        self.assertEqual(model_02_params["linear_x"], "$(arg model_02_linear_x)")
-        self.assertEqual(model_02_params["angular_y_deg"], "0.0")
+        for index in range(1, 5):
+            prefix = f"model_{index:02d}"
+            node = nodes[f"$(arg {prefix}_node_name)"]
+            with self.subTest(model=prefix):
+                self.assertEqual(node.attrib.get("type"), "model_motion_controller.py")
+                self.assertEqual(
+                    node.attrib.get("if"),
+                    "$(eval arg('control_mode') == 'multi' and "
+                    f"arg('{prefix}_enabled'))",
+                )
+                params = {
+                    elem.attrib.get("name"): elem.attrib.get("value")
+                    for elem in node.findall("param")
+                }
+                self.assertEqual(params["model_name"], f"$(arg {prefix}_name)")
+                self.assertEqual(
+                    params["command_frame"], f"$(arg {prefix}_command_frame)"
+                )
+                for component in ("x", "y", "z"):
+                    self.assertEqual(
+                        params[f"linear_{component}"],
+                        f"$(arg {prefix}_linear_{component})",
+                    )
+                    self.assertEqual(
+                        params[f"angular_{component}_deg"],
+                        f"$(arg {prefix}_angular_{component}_deg)",
+                    )
+                self.assertEqual(
+                    params["start_delay"], f"$(arg {prefix}_start_delay)"
+                )
+                self.assertEqual(params["duration"], f"$(arg {prefix}_duration)")
+                self.assertEqual(
+                    params["scenario_id"], f"$(arg {prefix}_scenario_id)"
+                )
 
 
 if __name__ == "__main__":

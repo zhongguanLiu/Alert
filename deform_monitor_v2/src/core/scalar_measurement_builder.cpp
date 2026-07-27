@@ -1,10 +1,6 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/scalar_measurement_builder.hpp"
+
+#include "deform_monitor_v2/core/observable_subspace.hpp"
 
 #include <cmath>
 
@@ -14,14 +10,6 @@ namespace {
 
 bool IsFiniteScalar(double v) {
   return std::isfinite(v);
-}
-
-Eigen::Vector3d SafeNormalized(const Eigen::Vector3d& v, const Eigen::Vector3d& fallback) {
-  const double n = v.norm();
-  if (n < 1.0e-9) {
-    return fallback;
-  }
-  return v / n;
 }
 
 }  // namespace
@@ -36,7 +24,7 @@ AlignedVector<ScalarMeasurement> ScalarMeasurementBuilder::BuildMeasurements(
     const AnchorReference& anchor,
     const LocalSupportData& support,
     const PoseCov6D& /*pose_cov*/,
-    const Eigen::Vector3d& lidar_origin_R) const {
+    const Eigen::Vector3d& /*lidar_origin_R*/) const {
   AlignedVector<ScalarMeasurement> scalars;
   if (!support.valid || support.support_count < observation_params_.min_support_scalar) {
     return scalars;
@@ -45,17 +33,17 @@ AlignedVector<ScalarMeasurement> ScalarMeasurementBuilder::BuildMeasurements(
   auto maybe_add = [&](const Eigen::Vector3d& h,
                        double z,
                        double r,
-                       uint8_t type) {
+                       uint8_t type) -> bool {
     const double h_norm = h.norm();
     if (h_norm < 0.9 || h_norm > 1.1 || !IsFiniteScalar(z) || !IsFiniteScalar(r) || r <= 0.0) {
-      return;
+      return false;
     }
     if (support.support_count < observation_params_.min_support_scalar) {
-      return;
+      return false;
     }
     const double nis_like = std::abs(z) / std::sqrt(r);
     if (nis_like > observation_params_.tau_nis_scalar) {
-      return;
+      return false;
     }
     ScalarMeasurement m;
     m.h_R = h / h_norm;
@@ -63,13 +51,11 @@ AlignedVector<ScalarMeasurement> ScalarMeasurementBuilder::BuildMeasurements(
     m.r = r;
     m.type = type;
     scalars.push_back(m);
+    return true;
   };
 
-  const Eigen::Vector3d n = SafeNormalized(anchor.normal_R, Eigen::Vector3d::UnitZ());
-  const Eigen::Vector3d e1 = SafeNormalized(anchor.edge_normal_R, Eigen::Vector3d::UnitX());
-  const Eigen::Vector3d e2 = SafeNormalized(anchor.basis_R.col(1), Eigen::Vector3d::UnitY());
-  const Eigen::Vector3d radial =
-      SafeNormalized(support.centroid_R - lidar_origin_R, Eigen::Vector3d::UnitX());
+  const ObservableSubspace subspace = BuildObservableSubspace(anchor);
+  const Eigen::Vector3d n = subspace.basis_R.col(0);
 
   // View-dependent noise inflation: applies to all anchor types when the
   // sensor has moved, increasing measurement variance proportionally to
@@ -85,70 +71,34 @@ AlignedVector<ScalarMeasurement> ScalarMeasurementBuilder::BuildMeasurements(
       n.dot(support.centroid_cov * n) +
       n.dot(anchor.Sigma_ref_geom * n) +
       sigma_plane * sigma_plane;
-  maybe_add(n, z_plane, r_plane, 0);
-
-  if (anchor.type != AnchorType::PLANE) {
-    const double sigma_edge = noise_params_.sigma_edge0 * view_noise_scale;
-    const double z_edge = e1.dot(support.edge_centroid_R - anchor.edge_center_R);
-    const double r_edge =
-        e1.dot((support.edge_centroid_cov + anchor.Sigma_ref_geom) * e1) +
-        sigma_edge * sigma_edge;
-    maybe_add(e1, z_edge, r_edge, 1);
+  // The normal measurement is the common observable dimension for all anchor
+  // types. If it is invalid, a secondary scalar is not allowed to update the
+  // state on its own.
+  if (!maybe_add(n, z_plane, r_plane, 0)) {
+    return scalars;
   }
 
-  const double sigma_rad = noise_params_.sigma_rad0 * view_noise_scale;
-  const double z_rad = radial.dot(support.centroid_R - anchor.center_R);
-  const double r_rad =
-      radial.dot((support.centroid_cov + anchor.Sigma_ref_geom) * radial) +
-      sigma_rad * sigma_rad;
-  maybe_add(radial, z_rad, r_rad, 2);
-
-  if (support.reacquired) {
-    const Eigen::Vector3d delta = support.centroid_R - anchor.center_R;
-    const double delta_norm = delta.norm();
-    if (delta_norm > 1.0e-3) {
-      const Eigen::Vector3d motion_axis = SafeNormalized(delta, n);
-      const double r_motion =
-          motion_axis.dot((support.centroid_cov + anchor.Sigma_ref_geom) * motion_axis) +
-          noise_params_.sigma_bc0 * noise_params_.sigma_bc0;
-      maybe_add(motion_axis, motion_axis.dot(delta), r_motion, 4);
+  if (anchor.type == AnchorType::EDGE) {
+    const Eigen::Vector3d e1 = subspace.basis_R.col(1);
+    const int min_edge_support =
+        std::max(2, (observation_params_.min_support_scalar + 1) / 2);
+    if (support.edge_geometry_valid &&
+        support.edge_support_count >= min_edge_support) {
+      const double sigma_edge = noise_params_.sigma_edge0 * view_noise_scale;
+      const double z_edge = e1.dot(support.edge_centroid_R - anchor.edge_center_R);
+      const double r_edge =
+          e1.dot((support.edge_centroid_cov + anchor.Sigma_ref_edge) * e1) +
+          sigma_edge * sigma_edge;
+      maybe_add(e1, z_edge, r_edge, 1);
     }
-
-    const double z_e1 = e1.dot(delta);
-    if (std::abs(z_e1) > 1.0e-3) {
-      const double r_e1 =
-          e1.dot((support.centroid_cov + anchor.Sigma_ref_geom) * e1) +
-          noise_params_.sigma_edge0 * noise_params_.sigma_edge0;
-      maybe_add(e1, z_e1, r_e1, 5);
-    }
-
-    const double z_e2 = e2.dot(delta);
-    if (std::abs(z_e2) > 1.0e-3) {
-      const double r_e2 =
-          e2.dot((support.centroid_cov + anchor.Sigma_ref_geom) * e2) +
-          noise_params_.sigma_bc0 * noise_params_.sigma_bc0;
-      maybe_add(e2, z_e2, r_e2, 6);
-    }
-  }
-
-  if (anchor.type == AnchorType::BAND) {
+  } else if (anchor.type == AnchorType::BAND) {
+    const Eigen::Vector3d e2 = subspace.basis_R.col(1);
     const Eigen::Vector3d delta = support.band_centroid_R - anchor.band_center_R;
-    const Eigen::Vector3d candidates[4] = {n, e1, e2, radial};
-    Eigen::Vector3d axis = n;
-    double best_score = -1.0;
-    for (const auto& cand : candidates) {
-      const double score = std::abs(cand.dot(delta));
-      if (score > best_score) {
-        best_score = score;
-        axis = cand;
-      }
-    }
-    axis = SafeNormalized(axis, n);
-    const double z_band = axis.dot(delta);
+    const double z_band = e2.dot(delta);
     const double r_band =
-        axis.dot((support.band_centroid_cov + anchor.Sigma_ref_geom) * axis) +
+        e2.dot((support.band_centroid_cov + anchor.Sigma_ref_geom) * e2) +
         noise_params_.sigma_bc0 * noise_params_.sigma_bc0;
-    maybe_add(axis, z_band, r_band, 3);
+    maybe_add(e2, z_band, r_band, 3);
   }
 
   return scalars;

@@ -1,5 +1,5 @@
 <launch>
-
+<!-- Launch file for Livox MID360 LiDAR -->
 
 	<arg name="rviz" default="true" />
 	<arg name="record_odom_gt" default="false" />

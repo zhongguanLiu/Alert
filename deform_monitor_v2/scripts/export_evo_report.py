@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Author: zgliu@cumt.edu.cn
-# Affiliation: China University of Mining and Technology
-# Open-source release date: 2026-04-20
 
 import argparse
 import datetime as dt
@@ -94,10 +91,10 @@ def _format_metric_block(title, summary, unit, sse_unit=None):
     sse_unit = sse_unit or unit
     return (
         f"{title}\n"
-        f"Max: {summary.max_value:.6f} {unit}\n"
-        f"Mean: {summary.mean:.6f} {unit}\n"
-        f"Median: {summary.median:.6f} {unit}\n"
-        f"Min: {summary.min_value:.6f} {unit}\n"
+        f"最大值：{summary.max_value:.6f} {unit}\n"
+        f"平均值：{summary.mean:.6f} {unit}\n"
+        f"中位数：{summary.median:.6f} {unit}\n"
+        f"最小值：{summary.min_value:.6f} {unit}\n"
         f"RMSE：{summary.rmse:.6f} {unit}\n"
         f"SSE：{summary.sse:.6f} {sse_unit}\n"
         f"STD：{summary.std:.6f} {unit}\n"
@@ -131,45 +128,45 @@ def render_report_text(
     ape_plot_path = pathlib.Path(ape_plot_path)
     rpe_plot_path = pathlib.Path(rpe_plot_path)
 
-    note_lines = "\n".join(f"- {note}" for note in notes) if notes else "- none"
+    note_lines = "\n".join(f"- {note}" for note in notes) if notes else "- 无"
 
     return (
-        "EVO Trajectory Report\n"
+        "EVO 轨迹评测报告\n"
         "\n"
-        "1. Basic Info\n"
-        f"Run Dir: {run_dir}\n"
-        f"Generated: {generated_at}\n"
+        "一、基本信息\n"
+        f"运行目录：{run_dir}\n"
+        f"生成时间：{generated_at}\n"
         f"t_max_diff：{t_max_diff:.6f} s\n"
-        f"Align Mode: {alignment_mode}\n"
+        f"对齐模式：{alignment_mode}\n"
         f"RPE delta：{rpe_delta}\n"
         "\n"
-        "2. Input Trajectories\n"
+        "二、输入轨迹\n"
         f"GT TUM：{gt_tum_path}\n"
-        f"Odom TUM: {odom_tum_path}\n"
+        f"里程计 TUM：{odom_tum_path}\n"
         "\n"
-        "3. Trajectory Summary\n"
-        f"TUM Samples: {tum_summary.sample_count}\n"
-        f"Time Span: {tum_summary.start_time:.9f} s -> {tum_summary.end_time:.9f} s\n"
-        f"Duration: {tum_summary.duration_sec:.9f} s\n"
+        "三、轨迹概况\n"
+        f"TUM 样本数：{tum_summary.sample_count}\n"
+        f"时间跨度：{tum_summary.start_time:.9f} s -> {tum_summary.end_time:.9f} s\n"
+        f"持续时间：{tum_summary.duration_sec:.9f} s\n"
         "\n"
-        "4. APE Translation Error\n"
-        + _format_metric_block("APE Translation Error Stats", ape_summary, "m", sse_unit="m^2")
+        "四、APE 平移误差\n"
+        + _format_metric_block("APE 平移误差统计", ape_summary, "m", sse_unit="m^2")
         + "\n"
-        "5. RPE Translation Error\n"
-        + _format_metric_block("RPE Translation Error Stats", rpe_summary, "m", sse_unit="m^2")
+        "五、RPE 平移误差\n"
+        + _format_metric_block("RPE 平移误差统计", rpe_summary, "m", sse_unit="m^2")
         + "\n"
-        "6. Figures\n"
-        f"Trajectory Plot: {traj_plot_path}\n"
-        f"APE Plot: {ape_plot_path}\n"
-        f"RPE Plot: {rpe_plot_path}\n"
+        "六、图像文件\n"
+        f"轨迹叠加图：{traj_plot_path}\n"
+        f"APE 图像：{ape_plot_path}\n"
+        f"RPE 图像：{rpe_plot_path}\n"
         + "\n"
-        "7. Repro Commands\n"
-        "The commands below reproduce the exported outputs.\n"
-        f"Trajectory Cmd: {traj_command}\n"
-        f"APE Cmd: {ape_command}\n"
-        f"RPE Cmd: {rpe_command}\n"
+        "七、复现命令（发布产物路径）\n"
+        "以下命令用于复现已发布产物，命令本身引用最终输出路径。\n"
+        f"轨迹叠加命令：{traj_command}\n"
+        f"APE 命令：{ape_command}\n"
+        f"RPE 命令：{rpe_command}\n"
         "\n"
-        "8. Notes\n"
+        "八、备注\n"
         f"{note_lines}\n"
     )
 
@@ -353,8 +350,8 @@ def export_evo_report(run_dir, output_dir=None, t_max_diff=0.001, rpe_delta=1):
         stage_commands_txt.write_text(
             "\n".join(
                 [
-                    "# Repro Commands",
-                    "# The commands below use the final output paths.",
+                    "# 复现命令（发布产物路径）",
+                    "# 以下命令引用最终输出路径，可直接用于复现已发布产物。",
                     _command_to_text(final_traj_command),
                     _command_to_text(final_ape_command),
                     _command_to_text(final_rpe_command),

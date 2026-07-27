@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #ifndef DEFORM_MONITOR_V2_DATA_TYPES_HPP
 #define DEFORM_MONITOR_V2_DATA_TYPES_HPP
 
@@ -39,6 +33,11 @@ enum class AnchorType : uint8_t {
   BAND = 2
 };
 
+enum class AnchorReferenceOrigin : uint8_t {
+  INITIAL = 0,
+  INCREMENTAL = 1
+};
+
 enum class DetectionMode : uint8_t {
   NONE = 0,
   DISPLACEMENT = 1,
@@ -67,12 +66,19 @@ struct PersistentRiskParams {
   int window_size = 5;
   int min_hits_to_confirm = 3;
   int min_hit_streak_to_confirm = 2;
+  bool enable_identity_backed_intermittent_confirmation = false;
+  int intermittent_min_hits_to_confirm = 4;
+  double min_identity_confidence = 0.90;
+  double identity_reconnect_distance_scale = 1.0;
   double min_confirmed_mean_risk = 0.55;
   double min_confirmed_confidence = 0.50;
   double min_confirmed_support_mass = 2.5;
   double min_confirmed_span = 0.10;
   int miss_frames_to_fading = 2;
   int miss_frames_to_delete = 4;
+  int candidate_identity_memory_frames = 4;
+  double max_prediction_sec = 3.0;
+  double velocity_ema_alpha = 0.50;
   double fading_risk_floor = 0.40;
   bool allow_sparse_planar_regions = true;
 };
@@ -101,6 +107,13 @@ enum class ObsGateState : uint8_t {
   OBSERVABLE_WEAK = 2,
   OBSERVABLE_MISSING = 3,
   OBSERVABLE_REPLACED = 4
+};
+
+enum class ObjectAssociationState : uint8_t {
+  UNAVAILABLE = 0,
+  CONSISTENT = 1,
+  MISMATCH = 2,
+  MIXED = 3
 };
 
 struct IoParams {
@@ -137,9 +150,14 @@ struct ObservationParams {
   double current_voxel_size = 0.05;
   double tau_reacquire = 0.52;
   double reacquire_radius = 0.18;
+  double reacquire_max_innovation = 0.04;
+  double reacquire_innovation_scale = 0.02;
   int max_reacquire_candidates = 48;
   int min_support_scalar = 2;
   double tau_nis_scalar = 6.0;
+  double edge_max_direction_deg = 25.0;
+  double edge_min_linearity = 0.50;
+  double edge_min_type_stability = 0.75;
   bool soft_view_range_gate = false;    // When true, view_angle and range_ratio
                                         // become soft factors in cmp_score instead
                                         // of hard reject gates. Designed for mobile
@@ -215,6 +233,32 @@ struct GraphTemporalParams {
   double tau_graph_temporal = 0.60;
 };
 
+struct WeakPlaneMotionParams {
+  bool enable = false;
+  bool enable_mixed_types = true;
+  bool require_exterior_background_for_non_plane = true;
+  double radius = 0.16;
+  double component_match_radius = 0.20;
+  int min_support = 6;
+  int temporal_window_frames = 5;
+  int min_current_support = 2;
+  int min_temporal_frames = 2;
+  int min_streak = 3;
+  int min_exterior_background_support = 2;
+  int component_max_missed_frames = 2;
+  double min_ref_quality = 0.65;
+  double min_covariance_quality = 0.75;
+  double min_type_stability = 0.75;
+  double min_anchor_disp = 0.003;
+  double min_group_disp = 0.004;
+  double min_mean_chi2 = 4.0;
+  double min_direction_consistency = 0.80;
+  double component_match_direction_cos = 0.80;
+  double max_normal_deg = 20.0;
+  double max_group_residual = 0.004;
+  int streak_decay = 1;
+};
+
 struct AnchorBuildParams {
   double I_min = 20.0;
   double beta_edge = 1.0;
@@ -231,6 +275,15 @@ struct AnchorBuildParams {
   int min_support_points = 5;
   double edge_ref_bonus = 0.18;
   double band_ref_bonus = 0.10;
+};
+
+struct ObjectAssociationParams {
+  bool enable = false;
+  uint16_t invalid_id = 0;
+  uint16_t max_id = 254;
+  int min_support_points = 3;
+  double min_purity = 0.80;
+  double quantization_tolerance = 0.25;
 };
 
 struct NoiseParams {
@@ -359,10 +412,12 @@ struct VisualizationParams {
   bool show_all_anchors = false;
   bool show_comparable_anchors = false;
   bool show_cluster_boxes = false;
+  bool show_detected_object_boxes = false;
   bool show_cluster_text = false;
   bool text_only_significant = true;
   bool arrows_only_clustered_or_reacquired = true;
   double min_arrow_disp = 0.015;
+  double weak_plane_min_arrow_disp = 0.004;
   double min_arrow_contrast_score = 3.0;
   double max_arrow_disp = 0.08;
   double arrow_disp_scale = 10.0;
@@ -373,6 +428,9 @@ struct VisualizationParams {
   double cluster_outline_alpha = 0.95;
   double cluster_outline_width = 0.012;
   double cluster_min_box_size = 0.06;
+  double detected_object_box_margin = 0.08;
+  double detected_object_box_min_size = 0.12;
+  double detected_object_box_alpha = 0.20;
 };
 
 struct RiskVisualizationParams {
@@ -405,6 +463,7 @@ struct StructureUnitParams {
 };
 
 struct StructureUnitTrackerParams {
+  bool enable = true;
   double tau_exit = 0.5;
   double search_margin = 0.5;
   double orphan_radius = 0.08;
@@ -426,6 +485,13 @@ struct IncrementalParams {
   int max_new_anchors = 500;
 };
 
+struct RuntimeScalingParams {
+  // Experimental hook.  A value of 1.0 preserves production behaviour.
+  // Smaller values retain a deterministic, nested subset of the frozen
+  // initial anchors so anchor-count scaling can be measured independently.
+  double anchor_keep_ratio = 1.0;
+};
+
 struct DeformMonitorParams {
   IoParams io;
   ReferenceParams reference;
@@ -435,6 +501,7 @@ struct DeformMonitorParams {
   BackgroundBiasParams background_bias;
   LocalContrastParams local_contrast;
   GraphTemporalParams graph_temporal;
+  WeakPlaneMotionParams weak_plane_motion;
   AnchorBuildParams anchor;
   NoiseParams noise;
   ObservabilityParams observability;
@@ -450,6 +517,8 @@ struct DeformMonitorParams {
   RiskVisualizationParams risk_visualization;
   PersistentRiskParams persistent_risk;
   IncrementalParams incremental;
+  ObjectAssociationParams object_association;
+  RuntimeScalingParams runtime_scaling;
 };
 
 struct PoseCov6D {
@@ -475,6 +544,7 @@ struct AnchorReference {
   Eigen::Vector3d normal_R = Eigen::Vector3d::UnitZ();
   Eigen::Vector3d edge_normal_R = Eigen::Vector3d::UnitX();
   Eigen::Matrix3d Sigma_ref_geom = Eigen::Matrix3d::Identity() * 1.0e-4;
+  Eigen::Matrix3d Sigma_ref_edge = Eigen::Matrix3d::Identity() * 1.0e-4;
   AlignedVector<Eigen::Vector3d> support_points_R;
   double ref_quality = 0.0;
   double mean_range = 0.0;
@@ -489,7 +559,17 @@ struct AnchorReference {
   int matched_count = 0;
   double covariance_quality = 0.0;
   double type_stability = 0.0;
+  double shape_linearity = 0.0;
+  double shape_planarity = 0.0;
+  double shape_scattering = 0.0;
   bool frozen = false;
+  uint32_t reference_epoch = 0;
+  ros::Time reference_stamp;
+  AnchorReferenceOrigin reference_origin = AnchorReferenceOrigin::INITIAL;
+  uint16_t object_id = 0;
+  bool object_id_valid = false;
+  double object_id_confidence = 0.0;
+  int object_id_support_count = 0;
   std::vector<int> neighbor_indices;
 };
 
@@ -503,6 +583,7 @@ struct LocalSupportData {
   Eigen::Matrix3d centroid_cov = Eigen::Matrix3d::Identity() * 1.0e-4;
   Eigen::Vector3d edge_centroid_R = Eigen::Vector3d::Zero();
   Eigen::Matrix3d edge_centroid_cov = Eigen::Matrix3d::Identity() * 1.0e-4;
+  int edge_support_count = 0;
   Eigen::Vector3d band_centroid_R = Eigen::Vector3d::Zero();
   Eigen::Matrix3d band_centroid_cov = Eigen::Matrix3d::Identity() * 1.0e-4;
   Eigen::Matrix3d local_cov = Eigen::Matrix3d::Zero();
@@ -522,7 +603,22 @@ struct LocalSupportData {
   double expected_range_ratio = 1.0;
   double expected_incidence_cos = 0.0;
   double center_shift_norm = 0.0;
+  double shape_linearity = 0.0;
+  double shape_planarity = 0.0;
+  double shape_scattering = 1.0;
+  double edge_direction_angle_deg = 180.0;
+  double edge_geometry_stability = 0.0;
+  bool edge_geometry_valid = false;
+  double reacquisition_score = 0.0;
+  double reacquisition_innovation_norm = 0.0;
+  Eigen::Vector3d predicted_center_R = Eigen::Vector3d::Zero();
+  Eigen::Vector3d predicted_displacement_R = Eigen::Vector3d::Zero();
   int support_count = 0;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  int observed_object_id_support_count = 0;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
   ObsStatus status = ObsStatus::INVALID_NO_COMPARISON;
   ObsGateState gate_state = ObsGateState::NOT_OBSERVABLE;
   bool valid = false;
@@ -540,8 +636,24 @@ struct CurrentObservation {
   ObsStatus status = ObsStatus::INVALID_NO_COMPARISON;
   ObsGateState gate_state = ObsGateState::NOT_OBSERVABLE;
   int support_count = 0;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  int observed_object_id_support_count = 0;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
   double fit_rmse = 0.0;
   double overlap_score = 0.0;
+  int edge_support_count = 0;
+  double current_shape_linearity = 0.0;
+  double current_shape_planarity = 0.0;
+  double current_shape_scattering = 1.0;
+  double edge_direction_angle_deg = 180.0;
+  double edge_geometry_stability = 0.0;
+  bool edge_geometry_valid = false;
+  double reacquisition_score = 0.0;
+  double reacquisition_innovation_norm = 0.0;
+  Eigen::Vector3d predicted_center_R = Eigen::Vector3d::Zero();
+  Eigen::Vector3d predicted_displacement_R = Eigen::Vector3d::Zero();
   int dof_obs = 0;
   bool comparable = false;
   bool observable = false;
@@ -576,6 +688,11 @@ struct AnchorTrackState {
   bool comparable = false;
   bool observable = false;
   ObsGateState gate_state = ObsGateState::NOT_OBSERVABLE;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  int observed_object_id_support_count = 0;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
   bool significant = false;
   int local_bg_count = 0;
   double local_bg_disp_norm = 0.0;
@@ -597,6 +714,23 @@ struct AnchorTrackState {
   double graph_persistence_score = 0.0;
   double graph_diff_norm = 0.0;
   bool graph_candidate = false;
+  bool weak_plane_candidate = false;
+  int weak_plane_group_size = 0;
+  int weak_plane_current_support = 0;
+  int weak_plane_temporal_frame_support = 0;
+  int weak_plane_streak = 0;
+  double weak_plane_group_disp = 0.0;
+  double weak_plane_mean_chi2 = 0.0;
+  double weak_plane_direction_consistency = 0.0;
+  double weak_plane_group_residual = 0.0;
+  int weak_plane_component_id = -1;
+  int weak_plane_exterior_background_support = 0;
+  int weak_plane_mixed_type_support = 0;
+  bool weak_plane_cached_valid = false;
+  int weak_plane_cached_age_frames = 0;
+  Eigen::Vector3d weak_plane_cached_displacement_R = Eigen::Vector3d::Zero();
+  double weak_plane_cached_chi2 = 0.0;
+  bool instantaneous_displacement_evidence = false;
   bool persistent_candidate = false;
   bool disappearance_candidate = false;
   bool reacquired = false;
@@ -612,6 +746,7 @@ struct AnchorTrackState {
 
   Eigen::Vector3d directional_S = Eigen::Vector3d::Zero();
   double directional_quality_sum = 0.0;
+  double directional_magnitude_sum = 0.0;
   bool directional_persistent = false;
 
   Eigen::Vector3d D_max = Eigen::Vector3d::Zero();
@@ -622,6 +757,19 @@ struct MotionClusterState {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   int id = -1;
   std::vector<int> anchor_ids;
+  uint16_t object_id = 0;
+  bool object_id_valid = false;
+  double object_id_confidence = 0.0;
+  bool object_id_ambiguous = false;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  bool observed_object_id_ambiguous = false;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
+  int association_consistent_count = 0;
+  int association_mismatch_count = 0;
+  int association_mixed_count = 0;
+  int association_unavailable_count = 0;
   DetectionMode mode = DetectionMode::NONE;
   Eigen::Vector3d center_R = Eigen::Vector3d::Zero();
   Eigen::Vector3d bbox_min_R = Eigen::Vector3d::Zero();
@@ -645,6 +793,14 @@ struct RiskEvidenceState {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   int id = -1;
   AnchorType anchor_type = AnchorType::PLANE;
+  uint16_t object_id = 0;
+  bool object_id_valid = false;
+  double object_id_confidence = 0.0;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  int observed_object_id_support_count = 0;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
   ObsGateState obs_state = ObsGateState::NOT_OBSERVABLE;
   DetectionMode mode = DetectionMode::NONE;
   Eigen::Vector3d position_R = Eigen::Vector3d::Zero();
@@ -660,21 +816,59 @@ struct RiskEvidenceState {
   bool active = false;
 };
 
+struct ObjectAssociationAuditSource {
+  int anchor_id = -1;
+  uint16_t object_id = 0;
+  bool object_id_valid = false;
+  double object_id_confidence = 0.0;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
+};
+
 struct RiskVoxelState {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Eigen::Vector3d center_R = Eigen::Vector3d::Zero();
+  uint16_t object_id = 0;
+  bool object_id_valid = false;
+  double object_id_confidence = 0.0;
+  bool object_id_ambiguous = false;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  bool observed_object_id_ambiguous = false;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
+  int association_consistent_count = 0;
+  int association_mismatch_count = 0;
+  int association_mixed_count = 0;
+  int association_unavailable_count = 0;
   double risk_score = 0.0;
   double confidence = 0.0;
   double displacement_component = 0.0;
   double disappearance_component = 0.0;
   int source_count = 0;
   bool significant = false;
+  std::vector<ObjectAssociationAuditSource> association_sources;
 };
 
 struct RiskRegionState {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   int id = -1;
   RiskRegionType type = RiskRegionType::NONE;
+  uint16_t object_id = 0;
+  bool object_id_valid = false;
+  double object_id_confidence = 0.0;
+  bool object_id_ambiguous = false;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  bool observed_object_id_ambiguous = false;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
+  int association_consistent_count = 0;
+  int association_mismatch_count = 0;
+  int association_mixed_count = 0;
+  int association_unavailable_count = 0;
   Eigen::Vector3d center_R = Eigen::Vector3d::Zero();
   Eigen::Vector3d bbox_min_R = Eigen::Vector3d::Zero();
   Eigen::Vector3d bbox_max_R = Eigen::Vector3d::Zero();
@@ -690,7 +884,21 @@ struct PersistentRiskTrackState {
   int track_id = -1;
   PersistentRiskState state = PersistentRiskState::CANDIDATE;
   RiskRegionType region_type = RiskRegionType::NONE;
+  uint16_t object_id = 0;
+  bool object_id_valid = false;
+  double object_id_confidence = 0.0;
+  bool object_id_ambiguous = false;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_valid = false;
+  double observed_object_id_confidence = 0.0;
+  bool observed_object_id_ambiguous = false;
+  ObjectAssociationState object_association_state = ObjectAssociationState::UNAVAILABLE;
+  int association_consistent_count = 0;
+  int association_mismatch_count = 0;
+  int association_mixed_count = 0;
+  int association_unavailable_count = 0;
   Eigen::Vector3d last_center_R = Eigen::Vector3d::Zero();
+  Eigen::Vector3d center_velocity_R = Eigen::Vector3d::Zero();
   Eigen::Vector3d last_bbox_min_R = Eigen::Vector3d::Zero();
   Eigen::Vector3d last_bbox_max_R = Eigen::Vector3d::Zero();
   Eigen::Vector3d union_bbox_min_R = Eigen::Vector3d::Zero();
@@ -713,6 +921,7 @@ struct PersistentRiskTrackState {
   double prev_support_mass = 0.0;
   double prev_accumulated_risk = 0.0;
   ros::Time last_update;
+  ros::Time last_observation_stamp;
   std::deque<uint8_t> match_history;
 };
 

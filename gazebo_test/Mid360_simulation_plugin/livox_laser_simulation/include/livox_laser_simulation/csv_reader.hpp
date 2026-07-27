@@ -6,6 +6,7 @@
 #define SRC_GAZEBO_CSV_READER_HPP
 
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -18,9 +19,11 @@ class CsvReader {
         if (file_stream.is_open()) {
             std::string header;
             std::getline(file_stream, header, '\n');
-            while (!file_stream.eof()) {
-                std::string line_str;
-                std::getline(file_stream, line_str, '\n');
+            std::string line_str;
+            while (std::getline(file_stream, line_str)) {
+                if (line_str.empty()) {
+                    continue;
+                }
                 std::stringstream line_stream;
                 line_stream << line_str;
                 std::vector<double> data;

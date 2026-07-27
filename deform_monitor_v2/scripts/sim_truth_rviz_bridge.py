@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Author: zgliu@cumt.edu.cn
-# Affiliation: China University of Mining and Technology
-# Open-source release date: 2026-04-20
 
 import math
 

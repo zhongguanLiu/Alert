@@ -1,0 +1,12 @@
+std_msgs/Header header
+uint8 PHASE_REFERENCE=0
+uint8 PHASE_MONITORING=1
+uint8 phase
+uint32 reference_epoch
+time window_start
+time window_end
+uint32 frame_count
+uint64 total_point_count
+uint64 valid_label_point_count
+uint64 invalid_label_point_count
+deform_monitor_v2/ObjectHitStat[] objects

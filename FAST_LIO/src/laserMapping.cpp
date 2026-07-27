@@ -82,7 +82,7 @@ double kdtree_incremental_time = 0.0, kdtree_search_time = 0.0, kdtree_delete_ti
 double T1[MAXN], s_plot[MAXN], s_plot2[MAXN], s_plot3[MAXN], s_plot4[MAXN], s_plot5[MAXN], s_plot6[MAXN], s_plot7[MAXN], s_plot8[MAXN], s_plot9[MAXN], s_plot10[MAXN], s_plot11[MAXN];
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
-bool runtime_pos_log = true, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
+bool runtime_pos_log = true, runtime_performance_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
 /**************************/
 
 float res_last[100000] = {0.0};
@@ -103,6 +103,7 @@ double filter_size_corner_min = 0, filter_size_surf_min = 0, filter_size_map_min
 double cube_len = 0, HALF_FOV_COS = 0, FOV_DEG = 0, total_distance = 0, lidar_end_time = 0, first_lidar_time = 0.0;
 int effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count = 0;
 int iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
+int cloud_output_point_stride = 1;
 bool point_selected_surf[100000] = {0};
 bool lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
 bool scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
@@ -231,9 +232,7 @@ void points_cache_collect() {
 BoxPointType LocalMap_Points;
 bool Localmap_Initialized = false;
 
-/*
-  Update local-map bounds and remove stale KD-tree points.
-*/
+
 void lasermap_fov_segment() {
   cub_needrm.clear();
   kdtree_delete_counter = 0;
@@ -460,14 +459,24 @@ PointCloudXYZI::Ptr pcl_wait_pub(new PointCloudXYZI(500000, 1));
 PointCloudXYZI::Ptr pcl_wait_save(new PointCloudXYZI());
 void publish_frame_world(const ros::Publisher &pubLaserCloudFull) {
   if (scan_pub_en) {
+    // Runtime-scaling hook: this stride is applied only while serializing the
+    // registered cloud.  The undistorted/downsampled clouds used by the EKF,
+    // nearest-neighbour search, and ikd-tree above are never modified.
+    int requested_stride = cloud_output_point_stride;
+    if (ros::param::getCached("/publish/cloud_output_point_stride", requested_stride)) {
+      cloud_output_point_stride = std::max(1, requested_stride);
+    }
     PointCloudXYZI::Ptr laserCloudFullRes(dense_pub_en ? feats_undistort : feats_down_body);
-    int size = laserCloudFullRes->points.size();
+    const int source_size = laserCloudFullRes->points.size();
+    const int stride = std::max(1, cloud_output_point_stride);
+    const int size = (source_size + stride - 1) / stride;
     PointCloudXYZI::Ptr laserCloudWorld(
         new PointCloudXYZI(size, 1));
 
-    for (int i = 0; i < size; i++) {
-      RGBpointBodyToWorld(&laserCloudFullRes->points[i],
-                          &laserCloudWorld->points[i]);
+    int output_index = 0;
+    for (int source_index = 0; source_index < source_size; source_index += stride) {
+      RGBpointBodyToWorld(&laserCloudFullRes->points[source_index],
+                          &laserCloudWorld->points[output_index++]);
     }
 
     sensor_msgs::PointCloud2 laserCloudmsg;
@@ -729,6 +738,8 @@ int main(int argc, char **argv) {
   nh.param<bool>("publish/scan_publish_en", scan_pub_en, true);
   nh.param<bool>("publish/dense_publish_en", dense_pub_en, true);
   nh.param<bool>("publish/scan_bodyframe_pub_en", scan_body_pub_en, true);
+  nh.param<int>("publish/cloud_output_point_stride", cloud_output_point_stride, 1);
+  cloud_output_point_stride = std::max(1, cloud_output_point_stride);
   nh.param<int>("max_iteration", NUM_MAX_ITERATIONS, 4);
   nh.param<string>("map_file_path", map_file_path, "");
   nh.param<string>("common/lid_topic", lid_topic, "/livox/lidar");
@@ -752,7 +763,8 @@ int main(int argc, char **argv) {
   nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
   nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
   nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);
-  nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 1);
+  nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, false);
+  nh.param<bool>("runtime_performance_log_enable", runtime_performance_log, false);
   nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
   nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
   nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
@@ -866,10 +878,7 @@ int main(int argc, char **argv) {
       t1 = omp_get_wtime();
       feats_down_size = feats_down_body->points.size();
       /*** initialize the map kdtree ***/
-      /*
-        Downsample the input cloud, build the map KD-tree if needed,
-        and track the current map size.
-      */
+
       if (ikdtree.Root_Node == nullptr) {
         if (feats_down_size > 5) {
           ikdtree.set_downsample_param(filter_size_map_min);
@@ -899,14 +908,14 @@ int main(int argc, char **argv) {
       V3D ext_euler = SO3ToEuler(state_point.offset_R_L_I);
 
 
-      fout_pre << setw(20) << Measures.lidar_beg_time - first_lidar_time << " " << euler_cur.transpose() << " " << state_point.pos.transpose() << " " << ext_euler.transpose() << " " << state_point.offset_T_L_I.transpose() << " " << state_point.vel.transpose()
-               << " " << state_point.bg.transpose() << " " << state_point.ba.transpose() << " " << state_point.grav << endl;
+      if (runtime_pos_log) {
+        fout_pre << setw(20) << Measures.lidar_beg_time - first_lidar_time << " " << euler_cur.transpose() << " " << state_point.pos.transpose() << " " << ext_euler.transpose() << " " << state_point.offset_T_L_I.transpose() << " " << state_point.vel.transpose()
+                 << " " << state_point.bg.transpose() << " " << state_point.ba.transpose() << " " << state_point.grav << endl;
+      }
 
       if (0) // If you need to see map point, change to "if(1)"
       {
-        /*
-          Flatten the KD-tree into a point cloud for debug use.
-        */
+
         PointVector().swap(ikdtree.PCL_Storage);
         ikdtree.flatten(ikdtree.Root_Node, ikdtree.PCL_Storage, NOT_RECORD);
         featsFromMap->clear();
@@ -1023,6 +1032,7 @@ int main(int argc, char **argv) {
 
         dump_lio_state_to_log(fp);
       }
+      if (runtime_performance_log) {
       // ******************************
 
 
@@ -1110,6 +1120,7 @@ int main(int argc, char **argv) {
                << std::setprecision(6) << cpu_percent << ","
                << std::setprecision(6) << resident_set / 1000.0
                << std::endl;
+      }
     }
 
     status = ros::ok();

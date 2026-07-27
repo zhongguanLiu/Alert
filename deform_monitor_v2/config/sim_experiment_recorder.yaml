@@ -1,15 +1,43 @@
 output_root: ~/.ros/alert/output
+recording_mode: debug
+# jsonl: legacy; dual: exact equivalence audit; sqlite_zlib: lossless compact storage.
+algorithm_storage_backend: sqlite_zlib
 truth_frame: world
 algorithm_frame: camera_init
 ego_model_name: mid360_fastlio
 model_states_topic: /gazebo/model_states
 link_states_topic: /gazebo/link_states
+# Object root poses and twists remain at 10 Hz by default so filter-lag and
+# response-limit measurements are not quantized to the ALERT 5-frame window.
+# These rates are independent of the algorithm and may be overridden per run.
+truth_object_rate_hz: 10.0
+truth_link_rate_hz: 10.0
+# Rigid surface truth markers are stored once in their owning model's local
+# frame. Their world trajectories are reconstructed from the model root pose.
+surface_truth_link_prefixes: [ground_truth_]
+record_surface_truth_link_trajectories: false
+# JSONL writes are buffered, but a bounded interval/row count limits data loss
+# if the process is interrupted. A clean run also writes meta/run_complete.json.
+record_flush_interval_sec: 1.0
+record_flush_max_rows: 100
+truth_subscriber_queue_size: 64
+truth_processing_queue_size: 256
+truth_processing_enqueue_timeout_sec: 2.0
+# Ground-truth motion state is declared by a sustained physical deadband, not
+# by exact floating-point inequality. These values affect evaluation only.
+truth_motion_policy:
+  translation_deadband_m: 0.001
+  rotation_deadband_deg: 0.05
+  linear_speed_deadband_mps: 0.0005
+  angular_speed_deadband_degps: 0.01
+  sustained_motion_samples: 2
 risk_evidence_topic: /deform/risk_evidence
 risk_regions_topic: /deform/risk_regions
 persistent_risk_regions_topic: /deform/persistent_risk_regions
 structure_motions_topic: /deform/structure_motions
 ground_truth_odometry_topic: /ground_truth/odom
 clusters_topic: /deform/clusters
+object_observation_stats_topic: /deform/object_observation_stats
 odometry_topic: /Odometry
 sensor_frame_name: livox
 sensor_scoped_link_name: ""
@@ -17,6 +45,67 @@ gt_tum_filename: gt_sensor_world_tum.txt
 odom_tum_filename: odom_raw_tum.txt
 deform_monitor_param_root: /deform_monitor_v2
 deform_monitor_config_path: ""
+# Optional fallback for worlds that use <include> models.
+# Each collision must use the same nonzero laser_retro ID as this model entry.
+object_id_catalog:
+  "1": l_shape_target
+  "2": model_01
+  "3": model_02
+  "4": table
+  "5": table_marble
+  "6": person_walking
+  "7": table_clone
+  "8": cardboard_box
+  "9": lzg_bianwood
+  "10": bookshelf
+  "11": frc2016_drawbridge
+  "12": lzg_grey_wall
+  "13": wooden_case_metal_peg
+  "14": cardboard_box_0
+  "15": bookshelf_0
+  "16": lzg_three_zhuzi
+  "17": cardboard_box_clone
+  "18": cardboard_box_1
+  "19": lzg_bianwood_clone
+  "20": lzg_bianwood_clone_0
+  "21": lzg_bianwood_clone_1
+  "22": grey_wall
+  "23": grey_wall_0
+  "24": ground_plane
+  "25": lzg_wall
+# Reproducible scenario factors used by the formal batch analyzer. Keep full
+# occlusion out of the evaluation set because a LiDAR cannot observe it.
+# Example:
+# experiment_factors:
+#   scene_id: collapse_world_v3
+#   shape_set: [plane, wedge, curved_band]
+#   size_set: [small, medium, large]
+#   moving_object_quantity: 6
+#   scene_object_quantity: 24
+#   motion_profile: accelerating_rotation
+#   motion_direction: mixed
+#   visibility_condition: partial_occlusion
+#   platform_condition: static
+#   slam_pipeline: fast_lio
+#   point_cloud_setting: nominal
+#   repeat_index: 1
+experiment_factors: {}
+# Per-object factors are joined to object/type/vector metrics by exact Gazebo
+# model name. Add entries for every evaluated moving object.
+# object_metadata:
+#   model_01:
+#     shape: rectangular_panel
+#     size_class: large
+#     motion_profile: constant_translation
+#     motion_direction: positive_x
+#     visibility_condition: clear
+#   model_02:
+#     shape: wedge
+#     size_class: medium
+#     motion_profile: accelerating_rotation
+#     motion_direction: positive_yaw
+#     visibility_condition: partial_occlusion
+object_metadata: {}
 # Single-object fallback metadata only.
 # Motion-controller auto-discovery takes precedence whenever it succeeds.
 scenario_id: ""

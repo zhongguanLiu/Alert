@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/risk_field_builder.hpp"
 
 #include <cmath>
@@ -44,6 +38,23 @@ struct VoxelAccumulator {
   double weighted_disp = 0.0;
   double weighted_disappear = 0.0;
   int source_count = 0;
+  uint16_t object_id = 0;
+  bool object_id_seen = false;
+  bool object_id_complete = true;
+  bool object_id_ambiguous = false;
+  double weighted_object_confidence = 0.0;
+  double object_weight_sum = 0.0;
+  uint16_t observed_object_id = 0;
+  bool observed_object_id_seen = false;
+  bool observed_object_id_complete = true;
+  bool observed_object_id_ambiguous = false;
+  double weighted_observed_object_confidence = 0.0;
+  double observed_object_weight_sum = 0.0;
+  int association_consistent_count = 0;
+  int association_mismatch_count = 0;
+  int association_mixed_count = 0;
+  int association_unavailable_count = 0;
+  std::vector<ObjectAssociationAuditSource> association_sources;
 };
 
 double Clamp01(double value) {
@@ -61,6 +72,43 @@ RiskRegionType ClassifyRegionType(double disp_sum, double disappear_sum) {
     return RiskRegionType::DISAPPEARANCE_LIKE;
   }
   return RiskRegionType::MIXED;
+}
+
+ObjectAssociationState SummarizeAssociationState(int consistent_count,
+                                                 int mismatch_count,
+                                                 int mixed_count) {
+  if (mixed_count > 0) {
+    return ObjectAssociationState::MIXED;
+  }
+  if (mismatch_count > 0) {
+    return ObjectAssociationState::MISMATCH;
+  }
+  if (consistent_count > 0) {
+    return ObjectAssociationState::CONSISTENT;
+  }
+  return ObjectAssociationState::UNAVAILABLE;
+}
+
+void IncrementAssociationState(ObjectAssociationState state,
+                               int* consistent_count,
+                               int* mismatch_count,
+                               int* mixed_count,
+                               int* unavailable_count) {
+  switch (state) {
+    case ObjectAssociationState::CONSISTENT:
+      ++(*consistent_count);
+      break;
+    case ObjectAssociationState::MISMATCH:
+      ++(*mismatch_count);
+      break;
+    case ObjectAssociationState::MIXED:
+      ++(*mixed_count);
+      break;
+    case ObjectAssociationState::UNAVAILABLE:
+    default:
+      ++(*unavailable_count);
+      break;
+  }
 }
 
 }  // namespace
@@ -134,6 +182,47 @@ RiskVoxelVector RiskFieldBuilder::Build(const AnchorReferenceVector& anchors,
           cell.weighted_conf += w * evidence.confidence;
           cell.weighted_disp += w * evidence.displacement_score;
           cell.weighted_disappear += w * evidence.disappearance_score;
+          if (!evidence.object_id_valid) {
+            cell.object_id_complete = false;
+          } else {
+            if (!cell.object_id_seen) {
+              cell.object_id = evidence.object_id;
+              cell.object_id_seen = true;
+            } else if (cell.object_id != evidence.object_id) {
+              cell.object_id_ambiguous = true;
+            }
+            cell.weighted_object_confidence +=
+                w * Clamp01(evidence.object_id_confidence);
+            cell.object_weight_sum += w;
+          }
+          if (!evidence.observed_object_id_valid) {
+            cell.observed_object_id_complete = false;
+          } else {
+            if (!cell.observed_object_id_seen) {
+              cell.observed_object_id = evidence.observed_object_id;
+              cell.observed_object_id_seen = true;
+            } else if (cell.observed_object_id != evidence.observed_object_id) {
+              cell.observed_object_id_ambiguous = true;
+            }
+            cell.weighted_observed_object_confidence +=
+                w * Clamp01(evidence.observed_object_id_confidence);
+            cell.observed_object_weight_sum += w;
+          }
+          IncrementAssociationState(evidence.object_association_state,
+                                    &cell.association_consistent_count,
+                                    &cell.association_mismatch_count,
+                                    &cell.association_mixed_count,
+                                    &cell.association_unavailable_count);
+          ObjectAssociationAuditSource source;
+          source.anchor_id = evidence.id;
+          source.object_id = evidence.object_id;
+          source.object_id_valid = evidence.object_id_valid;
+          source.object_id_confidence = evidence.object_id_confidence;
+          source.observed_object_id = evidence.observed_object_id;
+          source.observed_object_id_valid = evidence.observed_object_id_valid;
+          source.observed_object_id_confidence = evidence.observed_object_id_confidence;
+          source.object_association_state = evidence.object_association_state;
+          cell.association_sources.push_back(source);
           ++cell.source_count;
         }
       }
@@ -148,6 +237,33 @@ RiskVoxelVector RiskFieldBuilder::Build(const AnchorReferenceVector& anchors,
     }
     RiskVoxelState voxel;
     voxel.center_R = cell.center_sum / static_cast<double>(cell.center_count);
+    voxel.object_id = cell.object_id;
+    voxel.object_id_ambiguous = cell.object_id_ambiguous;
+    voxel.object_id_valid = cell.object_id_seen && cell.object_id_complete &&
+                            !cell.object_id_ambiguous;
+    voxel.object_id_confidence =
+        voxel.object_id_valid && cell.object_weight_sum > 1.0e-9
+            ? Clamp01(cell.weighted_object_confidence / cell.object_weight_sum)
+            : 0.0;
+    voxel.observed_object_id = cell.observed_object_id;
+    voxel.observed_object_id_ambiguous = cell.observed_object_id_ambiguous;
+    voxel.observed_object_id_valid = cell.observed_object_id_seen &&
+                                     cell.observed_object_id_complete &&
+                                     !cell.observed_object_id_ambiguous;
+    voxel.observed_object_id_confidence =
+        voxel.observed_object_id_valid && cell.observed_object_weight_sum > 1.0e-9
+            ? Clamp01(cell.weighted_observed_object_confidence /
+                      cell.observed_object_weight_sum)
+            : 0.0;
+    voxel.association_consistent_count = cell.association_consistent_count;
+    voxel.association_mismatch_count = cell.association_mismatch_count;
+    voxel.association_mixed_count = cell.association_mixed_count;
+    voxel.association_unavailable_count = cell.association_unavailable_count;
+    voxel.object_association_state = SummarizeAssociationState(
+        voxel.association_consistent_count,
+        voxel.association_mismatch_count,
+        voxel.association_mixed_count);
+    voxel.association_sources = cell.association_sources;
     voxel.risk_score = Clamp01(cell.weighted_risk / cell.weight_sum);
     voxel.confidence = Clamp01(cell.weighted_conf / cell.weight_sum);
     voxel.displacement_component = Clamp01(cell.weighted_disp / cell.weight_sum);
@@ -244,6 +360,23 @@ RiskRegionVector RiskFieldBuilder::ExtractRegions(const RiskVoxelVector& voxels)
     double peak_risk = 0.0;
     double disp_sum = 0.0;
     double disappear_sum = 0.0;
+    uint16_t object_id = 0;
+    bool object_id_seen = false;
+    bool object_id_complete = true;
+    bool object_id_ambiguous = false;
+    double object_confidence_sum = 0.0;
+    double object_confidence_weight = 0.0;
+    uint16_t observed_object_id = 0;
+    bool observed_object_id_seen = false;
+    bool observed_object_id_complete = true;
+    bool observed_object_id_ambiguous = false;
+    double observed_object_confidence_sum = 0.0;
+    double observed_object_confidence_weight = 0.0;
+    int association_consistent_count = 0;
+    int association_mismatch_count = 0;
+    int association_mixed_count = 0;
+    int association_unavailable_count = 0;
+    std::unordered_map<int, ObjectAssociationAuditSource> unique_sources;
     for (const size_t idx : region_indices) {
       const auto& voxel = voxels[idx];
       region.bbox_min_R = region.bbox_min_R.cwiseMin(voxel.center_R);
@@ -254,6 +387,96 @@ RiskRegionVector RiskFieldBuilder::ExtractRegions(const RiskVoxelVector& voxels)
       peak_risk = std::max(peak_risk, voxel.risk_score);
       disp_sum += voxel.displacement_component;
       disappear_sum += voxel.disappearance_component;
+      if (!voxel.object_id_valid) {
+        object_id_complete = false;
+        object_id_ambiguous =
+            object_id_ambiguous || voxel.object_id_ambiguous;
+      } else {
+        if (!object_id_seen) {
+          object_id = voxel.object_id;
+          object_id_seen = true;
+        } else if (object_id != voxel.object_id) {
+          object_id_ambiguous = true;
+        }
+        const double weight = std::max(1.0e-6, voxel.risk_score);
+        object_confidence_sum += weight * voxel.object_id_confidence;
+        object_confidence_weight += weight;
+      }
+      if (!voxel.observed_object_id_valid) {
+        observed_object_id_complete = false;
+        observed_object_id_ambiguous =
+            observed_object_id_ambiguous || voxel.observed_object_id_ambiguous;
+      } else {
+        if (!observed_object_id_seen) {
+          observed_object_id = voxel.observed_object_id;
+          observed_object_id_seen = true;
+        } else if (observed_object_id != voxel.observed_object_id) {
+          observed_object_id_ambiguous = true;
+        }
+        const double weight = std::max(1.0e-6, voxel.risk_score);
+        observed_object_confidence_sum +=
+            weight * voxel.observed_object_id_confidence;
+        observed_object_confidence_weight += weight;
+      }
+      association_consistent_count += voxel.association_consistent_count;
+      association_mismatch_count += voxel.association_mismatch_count;
+      association_mixed_count += voxel.association_mixed_count;
+      association_unavailable_count += voxel.association_unavailable_count;
+      for (const auto& source : voxel.association_sources) {
+        unique_sources.emplace(source.anchor_id, source);
+      }
+    }
+
+    if (!unique_sources.empty()) {
+      object_id = 0;
+      object_id_seen = false;
+      object_id_complete = true;
+      object_id_ambiguous = false;
+      object_confidence_sum = 0.0;
+      object_confidence_weight = 0.0;
+      observed_object_id = 0;
+      observed_object_id_seen = false;
+      observed_object_id_complete = true;
+      observed_object_id_ambiguous = false;
+      observed_object_confidence_sum = 0.0;
+      observed_object_confidence_weight = 0.0;
+      association_consistent_count = 0;
+      association_mismatch_count = 0;
+      association_mixed_count = 0;
+      association_unavailable_count = 0;
+      for (const auto& source_kv : unique_sources) {
+        const auto& source = source_kv.second;
+        if (!source.object_id_valid) {
+          object_id_complete = false;
+        } else {
+          if (!object_id_seen) {
+            object_id = source.object_id;
+            object_id_seen = true;
+          } else if (object_id != source.object_id) {
+            object_id_ambiguous = true;
+          }
+          object_confidence_sum += Clamp01(source.object_id_confidence);
+          object_confidence_weight += 1.0;
+        }
+        if (!source.observed_object_id_valid) {
+          observed_object_id_complete = false;
+        } else {
+          if (!observed_object_id_seen) {
+            observed_object_id = source.observed_object_id;
+            observed_object_id_seen = true;
+          } else if (observed_object_id != source.observed_object_id) {
+            observed_object_id_ambiguous = true;
+          }
+          observed_object_confidence_sum +=
+              Clamp01(source.observed_object_id_confidence);
+          observed_object_confidence_weight += 1.0;
+        }
+        IncrementAssociationState(source.object_association_state,
+                                  &association_consistent_count,
+                                  &association_mismatch_count,
+                                  &association_mixed_count,
+                                  &association_unavailable_count);
+      }
     }
     region.voxel_count = static_cast<int>(region_indices.size());
     region.center_R = center_sum / std::max(1.0, static_cast<double>(region.voxel_count));
@@ -261,6 +484,32 @@ RiskRegionVector RiskFieldBuilder::ExtractRegions(const RiskVoxelVector& voxels)
     region.mean_risk = Clamp01(risk_sum / std::max(1.0, static_cast<double>(region.voxel_count)));
     region.peak_risk = Clamp01(peak_risk);
     region.type = ClassifyRegionType(disp_sum, disappear_sum);
+    region.object_id = object_id;
+    region.object_id_ambiguous = object_id_ambiguous;
+    region.object_id_valid = object_id_seen && object_id_complete &&
+                             !object_id_ambiguous;
+    region.object_id_confidence =
+        region.object_id_valid && object_confidence_weight > 1.0e-9
+            ? Clamp01(object_confidence_sum / object_confidence_weight)
+            : 0.0;
+    region.observed_object_id = observed_object_id;
+    region.observed_object_id_ambiguous = observed_object_id_ambiguous;
+    region.observed_object_id_valid = observed_object_id_seen &&
+                                      observed_object_id_complete &&
+                                      !observed_object_id_ambiguous;
+    region.observed_object_id_confidence =
+        region.observed_object_id_valid && observed_object_confidence_weight > 1.0e-9
+            ? Clamp01(observed_object_confidence_sum /
+                      observed_object_confidence_weight)
+            : 0.0;
+    region.association_consistent_count = association_consistent_count;
+    region.association_mismatch_count = association_mismatch_count;
+    region.association_mixed_count = association_mixed_count;
+    region.association_unavailable_count = association_unavailable_count;
+    region.object_association_state = SummarizeAssociationState(
+        association_consistent_count,
+        association_mismatch_count,
+        association_mixed_count);
     region.significant =
         region.voxel_count >= std::max(1, params_.min_region_voxels) &&
         region.mean_risk >= params_.min_region_mean_risk;

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config" default="$(find livox_laser_simulation)/config/synchronized_multi_model_motion.yaml" />
+  <arg name="world" default="$(find livox_laser_simulation)/worlds/tracked_mid360_fastlio_collapse_microdeform_sim.world" />
+  <arg name="gui" default="true" />
+  <arg name="paused" default="false" />
+  <arg name="linear_speed_mm_s" default="1.0" />
+  <arg name="angular_speed_rad_s" default="0.0015" />
+
+  <!-- Parameters are loaded before Gazebo. The world plugin remains idle until reload/start are called. -->
+  <rosparam command="load" file="$(arg config)" ns="synchronized_model_motion" />
+  <param name="synchronized_model_motion/linear_speed_mm_s" value="$(arg linear_speed_mm_s)" />
+  <param name="synchronized_model_motion/angular_speed_rad_s" value="$(arg angular_speed_rad_s)" />
+
+  <include file="$(find livox_laser_simulation)/launch/mid360_fastlio.launch">
+    <arg name="world" value="$(arg world)" />
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="paused" value="$(arg paused)" />
+    <arg name="spawn_robot" value="true" />
+    <arg name="auto_drive" value="false" />
+    <arg name="keyboard_teleop" value="false" />
+  </include>
+</launch>

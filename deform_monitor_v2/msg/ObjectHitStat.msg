@@ -1,0 +1,3 @@
+uint16 object_id
+uint64 point_count
+uint32 visible_frame_count

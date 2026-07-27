@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #ifndef DEFORM_MONITOR_V2_RISK_VISUALIZATION_PUBLISHER_HPP
 #define DEFORM_MONITOR_V2_RISK_VISUALIZATION_PUBLISHER_HPP
 
@@ -41,7 +35,8 @@ public:
   deform_monitor_v2::PersistentRiskRegions BuildPersistentRiskRegionsMsg(
       const PersistentRiskTrackVector& tracks,
       const ros::Time& stamp,
-      const std::string& frame_id) const;
+      const std::string& frame_id,
+      uint32_t reference_epoch) const;
 
   visualization_msgs::MarkerArray BuildRiskMarkers(
       const RiskVoxelVector& voxels,

@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #ifndef DEFORM_MONITOR_V2_RISK_EVIDENCE_ADAPTER_HPP
 #define DEFORM_MONITOR_V2_RISK_EVIDENCE_ADAPTER_HPP
 
@@ -16,6 +10,10 @@ public:
   void SetParams(const RiskVisualizationParams& risk_params,
                  const SignificanceParams& significance_params,
                  const GraphTemporalParams& graph_params);
+  void SetParams(const RiskVisualizationParams& risk_params,
+                 const SignificanceParams& significance_params,
+                 const GraphTemporalParams& graph_params,
+                 const WeakPlaneMotionParams& weak_plane_params);
 
   RiskEvidenceVector Build(const AnchorReferenceVector& anchors,
                            const AnchorStateVector& states,
@@ -26,6 +24,7 @@ private:
   RiskVisualizationParams risk_params_;
   SignificanceParams significance_params_;
   GraphTemporalParams graph_params_;
+  WeakPlaneMotionParams weak_plane_params_;
 };
 
 }  // namespace deform_monitor_v2

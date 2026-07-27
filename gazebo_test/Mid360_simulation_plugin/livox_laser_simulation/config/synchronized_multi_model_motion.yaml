@@ -1,0 +1,73 @@
+# Loading this file never starts motion. Call reload, then start explicitly.
+start_delay: 10.0
+duration: 40.0  # <= 0 keeps running until the atomic stop service is called.
+end_hold: 10.0
+linear_speed_mm_s: 1.0
+angular_speed_rad_s: 0.0015
+# ID 6 walks along -Y for this many seconds, then along +Y at the same speed.
+person_walking_switch_time: 20.0
+person_walking_second_linear_mps: [0.0, 0.1, 0.0]
+
+models:
+  - id: 1
+    model_name: l_shape_target
+    command_frame: world
+    linear_direction: [0.0, 0.0, 0.0]
+    angular_axis: [0.0, 0.0, 1.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]
+  - id: 2
+    model_name: model_01
+    command_frame: world
+    linear_direction: [0.0, 0.0, 0.0]
+    # Counter-rotate around world Z relative to ID 1 (l_shape_target).
+    angular_axis: [0.0, 0.0, -1.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]
+  - id: 3
+    model_name: model_02
+    command_frame: world
+    linear_direction: [1.0, 0.0, 0.0]
+    angular_axis: [0.0, 0.0, 0.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]
+  - id: 4
+    model_name: table
+    command_frame: world
+    linear_direction: [0.0, 1.0, 0.0]
+    angular_axis: [0.0, 0.0, 0.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]
+  - id: 5
+    model_name: table_marble
+    command_frame: world
+    linear_direction: [0.0, 0.0, 0.0]
+    # The visually high local +X end moves toward world +Z for a -Y rotation.
+    angular_axis: [0.0, -1.0, 0.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]
+  - id: 6
+    model_name: person_walking
+    command_frame: world
+    linear_direction: [0.0, 0.0, 0.0]
+    angular_axis: [0.0, 0.0, 0.0]
+    fixed_linear_mps: [0.0, -0.1, 0.0]
+  - id: 7
+    model_name: table_clone
+    command_frame: world
+    linear_direction: [0.0, 0.0, 0.0]
+    angular_axis: [0.0, 0.0, 1.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]
+  - id: 8
+    model_name: cardboard_box
+    command_frame: world
+    linear_direction: [1.0, 0.0, 0.0]
+    angular_axis: [0.0, 0.0, 0.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]
+  - id: 9
+    model_name: lzg_bianwood
+    command_frame: world
+    linear_direction: [0.0, 0.0, 0.0]
+    angular_axis: [-1.0, 0.0, 0.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]
+  - id: 10
+    model_name: bookshelf
+    command_frame: world
+    linear_direction: [0.0, 1.0, 0.0]
+    angular_axis: [0.0, 0.0, 0.0]
+    fixed_linear_mps: [0.0, 0.0, 0.0]

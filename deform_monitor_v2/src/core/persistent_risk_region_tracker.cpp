@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/persistent_risk_region_tracker.hpp"
 
 #include <algorithm>
@@ -98,6 +92,158 @@ bool TypeCompatible(RiskRegionType track_type, RiskRegionType region_type) {
   return track_type == RiskRegionType::MIXED || region_type == RiskRegionType::MIXED;
 }
 
+bool AssociationCompatible(const PersistentRiskTrackState& track,
+                           const RiskRegionState& region) {
+  if (track.object_id_valid && region.object_id_valid &&
+      track.object_id != region.object_id) {
+    return false;
+  }
+  if (track.observed_object_id_valid && region.observed_object_id_valid &&
+      track.observed_object_id != region.observed_object_id) {
+    return false;
+  }
+  return true;
+}
+
+bool HasStrongConsistentIdentity(const PersistentRiskTrackState& track,
+                                 double min_confidence) {
+  const double threshold = Clamp01(min_confidence);
+  return track.object_id_valid &&
+         track.observed_object_id_valid &&
+         !track.object_id_ambiguous &&
+         !track.observed_object_id_ambiguous &&
+         track.object_id == track.observed_object_id &&
+         track.object_id_confidence >= threshold &&
+         track.observed_object_id_confidence >= threshold &&
+         track.object_association_state == ObjectAssociationState::CONSISTENT &&
+         track.association_consistent_count > 0 &&
+         track.association_mismatch_count == 0 &&
+         track.association_mixed_count == 0;
+}
+
+bool HasStrongSameIdentity(const PersistentRiskTrackState& track,
+                           const RiskRegionState& region,
+                           double min_confidence) {
+  const double threshold = Clamp01(min_confidence);
+  return HasStrongConsistentIdentity(track, threshold) &&
+         region.object_id_valid &&
+         region.observed_object_id_valid &&
+         !region.object_id_ambiguous &&
+         !region.observed_object_id_ambiguous &&
+         region.object_id == track.object_id &&
+         region.observed_object_id == track.observed_object_id &&
+         region.object_id == region.observed_object_id &&
+         region.object_id_confidence >= threshold &&
+         region.observed_object_id_confidence >= threshold &&
+         region.object_association_state == ObjectAssociationState::CONSISTENT &&
+         region.association_consistent_count > 0 &&
+         region.association_mismatch_count == 0 &&
+         region.association_mixed_count == 0;
+}
+
+Eigen::Vector3d PredictedTrackCenter(const PersistentRiskTrackState& track,
+                                     const ros::Time& stamp,
+                                     const PersistentRiskParams& params) {
+  if (track.last_observation_stamp.isZero() || stamp.isZero()) {
+    return track.last_center_R;
+  }
+  const double dt = std::max(
+      0.0, std::min(params.max_prediction_sec,
+                    (stamp - track.last_observation_stamp).toSec()));
+  return track.last_center_R + dt * track.center_velocity_R;
+}
+
+void PredictedTrackBBox(const PersistentRiskTrackState& track,
+                        const Eigen::Vector3d& predicted_center,
+                        Eigen::Vector3d* bbox_min,
+                        Eigen::Vector3d* bbox_max) {
+  const Eigen::Vector3d offset = predicted_center - track.last_center_R;
+  *bbox_min = track.last_bbox_min_R + offset;
+  *bbox_max = track.last_bbox_max_R + offset;
+}
+
+void MergeObjectAssociation(PersistentRiskTrackState* track,
+                            const RiskRegionState& region) {
+  if (!track || track->object_id_ambiguous) {
+    return;
+  }
+  if (region.object_id_ambiguous) {
+    track->object_id_valid = false;
+    track->object_id_confidence = 0.0;
+    track->object_id_ambiguous = true;
+    return;
+  }
+  if (!region.object_id_valid) {
+    return;
+  }
+  if (!track->object_id_valid) {
+    track->object_id = region.object_id;
+    track->object_id_valid = true;
+    track->object_id_confidence = Clamp01(region.object_id_confidence);
+    return;
+  }
+  if (track->object_id != region.object_id) {
+    track->object_id_valid = false;
+    track->object_id_confidence = 0.0;
+    track->object_id_ambiguous = true;
+    return;
+  }
+  track->object_id_confidence = std::min(
+      track->object_id_confidence, Clamp01(region.object_id_confidence));
+}
+
+void MergeObservedObjectAssociation(PersistentRiskTrackState* track,
+                                    const RiskRegionState& region) {
+  if (!track || track->observed_object_id_ambiguous) {
+    return;
+  }
+  if (region.observed_object_id_ambiguous) {
+    track->observed_object_id_valid = false;
+    track->observed_object_id_confidence = 0.0;
+    track->observed_object_id_ambiguous = true;
+    return;
+  }
+  if (!region.observed_object_id_valid) {
+    return;
+  }
+  if (!track->observed_object_id_valid) {
+    track->observed_object_id = region.observed_object_id;
+    track->observed_object_id_valid = true;
+    track->observed_object_id_confidence =
+        Clamp01(region.observed_object_id_confidence);
+    return;
+  }
+  if (track->observed_object_id != region.observed_object_id) {
+    track->observed_object_id_valid = false;
+    track->observed_object_id_confidence = 0.0;
+    track->observed_object_id_ambiguous = true;
+    return;
+  }
+  track->observed_object_id_confidence = std::min(
+      track->observed_object_id_confidence,
+      Clamp01(region.observed_object_id_confidence));
+}
+
+void AccumulateAssociationComposition(PersistentRiskTrackState* track,
+                                      const RiskRegionState& region) {
+  if (!track) {
+    return;
+  }
+  track->association_consistent_count += region.association_consistent_count;
+  track->association_mismatch_count += region.association_mismatch_count;
+  track->association_mixed_count += region.association_mixed_count;
+  track->association_unavailable_count += region.association_unavailable_count;
+  if (track->association_mixed_count > 0) {
+    track->object_association_state = ObjectAssociationState::MIXED;
+  } else if (track->association_mismatch_count > 0) {
+    track->object_association_state = ObjectAssociationState::MISMATCH;
+  } else if (track->association_consistent_count > 0) {
+    track->object_association_state = ObjectAssociationState::CONSISTENT;
+  } else {
+    track->object_association_state = ObjectAssociationState::UNAVAILABLE;
+  }
+}
+
 void UpdateStableRegionType(PersistentRiskTrackState* track, RiskRegionType region_type) {
   if (region_type == RiskRegionType::NONE) {
     return;
@@ -121,10 +267,15 @@ void UpdateStableRegionType(PersistentRiskTrackState* track, RiskRegionType regi
 
 double MatchCost(const PersistentRiskParams& params,
                  const PersistentRiskTrackState& track,
-                 const RiskRegionState& region) {
-  const double center_distance = (region.center_R - track.last_center_R).norm();
-  const double bbox_iou = BBoxIoU(track.union_bbox_min_R,
-                                  track.union_bbox_max_R,
+                 const RiskRegionState& region,
+                 const ros::Time& stamp) {
+  const Eigen::Vector3d predicted_center = PredictedTrackCenter(track, stamp, params);
+  Eigen::Vector3d predicted_bbox_min;
+  Eigen::Vector3d predicted_bbox_max;
+  PredictedTrackBBox(track, predicted_center, &predicted_bbox_min, &predicted_bbox_max);
+  const double center_distance = (region.center_R - predicted_center).norm();
+  const double bbox_iou = BBoxIoU(predicted_bbox_min,
+                                  predicted_bbox_max,
                                   region.bbox_min_R,
                                   region.bbox_max_R,
                                   std::max(0.02, 0.10 * params.max_center_distance));
@@ -172,6 +323,9 @@ void AbsorbFragmentIntoTrack(PersistentRiskTrackState* track,
   track->spatial_span = BBoxDiagonal(track->union_bbox_min_R, track->union_bbox_max_R);
   track->region_type = MergeRegionTypeSummary(track->region_type, region.type);
   track->stable_region_type = MergeRegionTypeSummary(track->stable_region_type, region.type);
+  MergeObjectAssociation(track, region);
+  MergeObservedObjectAssociation(track, region);
+  AccumulateAssociationComposition(track, region);
   track->last_update = stamp;
 }
 
@@ -192,7 +346,7 @@ PersistentRiskTrackVector PersistentRiskRegionTracker::Update(const RiskRegionVe
     return PersistentRiskTrackVector();
   }
 
-  const auto matches = MatchRegionsToTracks(regions);
+  const auto matches = MatchRegionsToTracks(regions, stamp);
   std::vector<uint8_t> matched_tracks(tracks_.size(), 0);
   std::vector<uint8_t> matched_regions(regions.size(), 0);
 
@@ -219,23 +373,38 @@ PersistentRiskTrackVector PersistentRiskRegionTracker::Update(const RiskRegionVe
       if (!TypeCompatible(track.region_type, region.type)) {
         continue;
       }
-      const double center_distance = (region.center_R - track.last_center_R).norm();
-      if (center_distance >= params_.max_center_distance) {
+      if (!AssociationCompatible(track, region)) {
         continue;
       }
-      const double bbox_iou = BBoxIoU(track.union_bbox_min_R,
-                                      track.union_bbox_max_R,
+      const Eigen::Vector3d predicted_center =
+          PredictedTrackCenter(track, stamp, params_);
+      const double center_distance = (region.center_R - predicted_center).norm();
+      const bool strong_same_identity =
+          HasStrongSameIdentity(track, region, params_.min_identity_confidence);
+      const double reconnect_scale = strong_same_identity
+          ? std::max(1.0, params_.identity_reconnect_distance_scale)
+          : 1.0;
+      if (center_distance >= params_.max_center_distance * reconnect_scale) {
+        continue;
+      }
+      Eigen::Vector3d predicted_bbox_min;
+      Eigen::Vector3d predicted_bbox_max;
+      PredictedTrackBBox(track, predicted_center,
+                         &predicted_bbox_min, &predicted_bbox_max);
+      const double bbox_iou = BBoxIoU(predicted_bbox_min,
+                                      predicted_bbox_max,
                                       region.bbox_min_R,
                                       region.bbox_max_R,
                                       std::max(0.02, 0.10 * params_.max_center_distance));
-      if (bbox_iou <= params_.min_bbox_iou) {
+      if (bbox_iou <= params_.min_bbox_iou && !strong_same_identity) {
         continue;
       }
       const double risk_gap = std::abs(region.mean_risk - track.ema_mean_risk);
       if (risk_gap > params_.max_risk_gap) {
         continue;
       }
-      fragment_candidates.push_back(MatchCandidate{region_idx, track_idx, MatchCost(params_, track, region)});
+      fragment_candidates.push_back(
+          MatchCandidate{region_idx, track_idx, MatchCost(params_, track, region, stamp)});
     }
   }
 
@@ -294,7 +463,7 @@ PersistentRiskTrackVector PersistentRiskRegionTracker::Update(const RiskRegionVe
 }
 
 std::vector<std::pair<size_t, size_t>> PersistentRiskRegionTracker::MatchRegionsToTracks(
-    const RiskRegionVector& regions) const {
+    const RiskRegionVector& regions, const ros::Time& stamp) const {
   std::vector<std::pair<size_t, size_t>> matches;
   if (tracks_.empty() || regions.empty()) {
     return matches;
@@ -309,23 +478,38 @@ std::vector<std::pair<size_t, size_t>> PersistentRiskRegionTracker::MatchRegions
       if (!TypeCompatible(track.region_type, region.type)) {
         continue;
       }
-      const double center_distance = (region.center_R - track.last_center_R).norm();
-      if (center_distance >= params_.max_center_distance) {
+      if (!AssociationCompatible(track, region)) {
         continue;
       }
-      const double bbox_iou = BBoxIoU(track.union_bbox_min_R,
-                                      track.union_bbox_max_R,
+      const Eigen::Vector3d predicted_center =
+          PredictedTrackCenter(track, stamp, params_);
+      const double center_distance = (region.center_R - predicted_center).norm();
+      const bool strong_same_identity =
+          HasStrongSameIdentity(track, region, params_.min_identity_confidence);
+      const double reconnect_scale = strong_same_identity
+          ? std::max(1.0, params_.identity_reconnect_distance_scale)
+          : 1.0;
+      if (center_distance >= params_.max_center_distance * reconnect_scale) {
+        continue;
+      }
+      Eigen::Vector3d predicted_bbox_min;
+      Eigen::Vector3d predicted_bbox_max;
+      PredictedTrackBBox(track, predicted_center,
+                         &predicted_bbox_min, &predicted_bbox_max);
+      const double bbox_iou = BBoxIoU(predicted_bbox_min,
+                                      predicted_bbox_max,
                                       region.bbox_min_R,
                                       region.bbox_max_R,
                                       std::max(0.02, 0.10 * params_.max_center_distance));
-      if (bbox_iou <= params_.min_bbox_iou) {
+      if (bbox_iou <= params_.min_bbox_iou && !strong_same_identity) {
         continue;
       }
       const double risk_gap = std::abs(region.mean_risk - track.ema_mean_risk);
       if (risk_gap > params_.max_risk_gap) {
         continue;
       }
-      candidates.push_back(MatchCandidate{region_idx, track_idx, MatchCost(params_, track, region)});
+      candidates.push_back(
+          MatchCandidate{region_idx, track_idx, MatchCost(params_, track, region, stamp)});
     }
   }
 
@@ -361,7 +545,21 @@ void PersistentRiskRegionTracker::UpdateMatchedTrack(PersistentRiskTrackState& t
   const double current_voxel_count = static_cast<double>(std::max(1, region.voxel_count));
   const double current_risk_mass = region.mean_risk * current_voxel_count;
 
+  if (!track.last_observation_stamp.isZero() && !stamp.isZero()) {
+    const double dt = (stamp - track.last_observation_stamp).toSec();
+    if (dt > 1.0e-6 && std::isfinite(dt)) {
+      const Eigen::Vector3d measured_velocity =
+          (region.center_R - track.last_center_R) / dt;
+      const double velocity_alpha = Clamp01(params_.velocity_ema_alpha);
+      track.center_velocity_R =
+          velocity_alpha * measured_velocity +
+          (1.0 - velocity_alpha) * track.center_velocity_R;
+    }
+  }
   track.region_type = region.type != RiskRegionType::NONE ? region.type : track.region_type;
+  MergeObjectAssociation(&track, region);
+  MergeObservedObjectAssociation(&track, region);
+  AccumulateAssociationComposition(&track, region);
   track.last_center_R = region.center_R;
   track.last_bbox_min_R = region.bbox_min_R;
   track.last_bbox_max_R = region.bbox_max_R;
@@ -390,6 +588,7 @@ void PersistentRiskRegionTracker::UpdateMatchedTrack(PersistentRiskTrackState& t
   track.accumulated_risk += current_risk_mass;
   track.spatial_span = BBoxDiagonal(track.union_bbox_min_R, track.union_bbox_max_R);
   track.last_update = stamp;
+  track.last_observation_stamp = stamp;
   RefreshConfirmationState(&track);
 }
 
@@ -412,7 +611,8 @@ void PersistentRiskRegionTracker::UpdateUnmatchedTracks(
     track.ema_voxel_count *= miss_decay;
     track.support_mass = track.ema_voxel_count;
     track.spatial_span = BBoxDiagonal(track.union_bbox_min_R, track.union_bbox_max_R);
-    if (!track.ever_confirmed) {
+    if (!track.ever_confirmed &&
+        track.miss_streak >= std::max(1, params_.candidate_identity_memory_frames)) {
       track.stable_region_type = RiskRegionType::NONE;
       track.stable_type_streak = 0;
       track.region_type = RiskRegionType::NONE;
@@ -433,6 +633,24 @@ PersistentRiskTrackState PersistentRiskRegionTracker::SpawnNewTrack(const RiskRe
   track.track_id = next_track_id_++;
   track.state = PersistentRiskState::CANDIDATE;
   track.region_type = region.type;
+  track.object_id = region.object_id;
+  track.object_id_valid = region.object_id_valid;
+  track.object_id_confidence = region.object_id_valid
+                                   ? Clamp01(region.object_id_confidence)
+                                   : 0.0;
+  track.object_id_ambiguous = region.object_id_ambiguous;
+  track.observed_object_id = region.observed_object_id;
+  track.observed_object_id_valid = region.observed_object_id_valid;
+  track.observed_object_id_confidence =
+      region.observed_object_id_valid
+          ? Clamp01(region.observed_object_id_confidence)
+          : 0.0;
+  track.observed_object_id_ambiguous = region.observed_object_id_ambiguous;
+  track.association_consistent_count = region.association_consistent_count;
+  track.association_mismatch_count = region.association_mismatch_count;
+  track.association_mixed_count = region.association_mixed_count;
+  track.association_unavailable_count = region.association_unavailable_count;
+  track.object_association_state = region.object_association_state;
   track.last_center_R = region.center_R;
   track.last_bbox_min_R = region.bbox_min_R;
   track.last_bbox_max_R = region.bbox_max_R;
@@ -456,6 +674,7 @@ PersistentRiskTrackState PersistentRiskRegionTracker::SpawnNewTrack(const RiskRe
   track.prev_support_mass = 0.0;
   track.prev_accumulated_risk = 0.0;
   track.last_update = stamp;
+  track.last_observation_stamp = stamp;
   track.match_history.clear();
   track.match_history.push_back(1);
   return track;
@@ -489,7 +708,24 @@ bool PersistentRiskRegionTracker::ShouldConfirmTrack(const PersistentRiskTrackSt
                              track.spatial_span >= params_.min_confirmed_span &&
                              stable_planar_type &&
                              meaningful_growth;
-  return conventional || sparse_planar;
+  const int intermittent_min_hits =
+      std::max(1, params_.intermittent_min_hits_to_confirm);
+  const bool intermittent_gap_observed =
+      std::find(track.match_history.begin(), track.match_history.end(), 0) !=
+      track.match_history.end();
+  const bool identity_backed_intermittent =
+      params_.enable_identity_backed_intermittent_confirmation &&
+      track.matched_region_count_window >= intermittent_min_hits &&
+      track.hit_streak < min_hit_streak_to_confirm &&
+      intermittent_gap_observed &&
+      signal_ready &&
+      track.support_mass >= params_.min_confirmed_support_mass &&
+      track.spatial_span >= params_.min_confirmed_span &&
+      IsPlanarLike(track.stable_region_type) &&
+      track.stable_type_streak >= intermittent_min_hits &&
+      meaningful_growth &&
+      HasStrongConsistentIdentity(track, params_.min_identity_confidence);
+  return conventional || sparse_planar || identity_backed_intermittent;
 }
 
 void PersistentRiskRegionTracker::RefreshConfirmationState(PersistentRiskTrackState* track) {

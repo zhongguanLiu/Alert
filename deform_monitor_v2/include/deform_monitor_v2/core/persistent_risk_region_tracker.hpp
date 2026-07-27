@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #ifndef DEFORM_MONITOR_V2_PERSISTENT_RISK_REGION_TRACKER_HPP
 #define DEFORM_MONITOR_V2_PERSISTENT_RISK_REGION_TRACKER_HPP
 
@@ -18,7 +12,8 @@ public:
   PersistentRiskTrackVector Update(const RiskRegionVector& regions, const ros::Time& stamp);
 
 private:
-  std::vector<std::pair<size_t, size_t>> MatchRegionsToTracks(const RiskRegionVector& regions) const;
+  std::vector<std::pair<size_t, size_t>> MatchRegionsToTracks(
+      const RiskRegionVector& regions, const ros::Time& stamp) const;
   void UpdateMatchedTrack(PersistentRiskTrackState& track,
                           const RiskRegionState& region,
                           const ros::Time& stamp);

@@ -3,7 +3,7 @@
 import math
 
 import rospy
-from gazebo_msgs.srv import DeleteModel, SpawnModel
+from gazebo_msgs.srv import GetWorldProperties, SpawnModel
 from geometry_msgs.msg import Pose
 
 
@@ -27,20 +27,27 @@ def main():
         rospy.logfatal("Model XML parameter not found: %s", model_param)
         raise SystemExit(1)
 
-    rospy.wait_for_service("/gazebo/delete_model")
+    rospy.wait_for_service("/gazebo/get_world_properties")
     rospy.wait_for_service("/gazebo/spawn_urdf_model")
 
-    delete_model = rospy.ServiceProxy("/gazebo/delete_model", DeleteModel)
+    get_world_properties = rospy.ServiceProxy(
+        "/gazebo/get_world_properties", GetWorldProperties
+    )
     spawn_model = rospy.ServiceProxy("/gazebo/spawn_urdf_model", SpawnModel)
 
     try:
-        delete_resp = delete_model(model_name)
-        if delete_resp.success:
-            rospy.loginfo("Deleted existing Gazebo model: %s", model_name)
-        else:
-            rospy.logwarn("DeleteModel returned false for %s: %s", model_name, delete_resp.status_message)
+        world = get_world_properties()
     except rospy.ServiceException as exc:
-        rospy.logwarn("DeleteModel failed for %s, continuing to spawn: %s", model_name, exc)
+        rospy.logfatal("Could not inspect Gazebo models before spawning %s: %s", model_name, exc)
+        raise SystemExit(1)
+
+    if model_name in world.model_names:
+        rospy.logfatal(
+            "Gazebo model %s is already present. Remove it from the world file "
+            "instead of hot-replacing a model with active sensor plugins.",
+            model_name,
+        )
+        raise SystemExit(1)
 
     pose = Pose()
     pose.position.x = x

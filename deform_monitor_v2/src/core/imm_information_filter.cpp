@@ -1,12 +1,7 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/imm_information_filter.hpp"
 
 #include "deform_monitor_v2/core/covariance_extractor.hpp"
+#include "deform_monitor_v2/core/observable_subspace.hpp"
 
 #include <Eigen/Cholesky>
 #include <Eigen/Eigenvalues>
@@ -80,22 +75,10 @@ Eigen::Matrix3d TypeConstraintInfo(const AnchorReference& anchor,
                                    double lambda_suppressed,
                                    const Eigen::Vector3d& prior_u,
                                    Eigen::Vector3d* constrained_ref_u) {
-  const Eigen::Vector3d e1 = anchor.basis_R.col(0).normalized();
-  const Eigen::Vector3d e2 = anchor.basis_R.col(1).normalized();
-  const Eigen::Vector3d n = anchor.basis_R.col(2).normalized();
-
-  Eigen::Matrix3d projector_allowed = Eigen::Matrix3d::Zero();
-  Eigen::Matrix3d projector_suppressed = Eigen::Matrix3d::Zero();
-  if (anchor.type == AnchorType::PLANE) {
-    projector_allowed = n * n.transpose();
-    projector_suppressed = e1 * e1.transpose() + e2 * e2.transpose();
-  } else if (anchor.type == AnchorType::EDGE) {
-    projector_allowed = e1 * e1.transpose() + n * n.transpose();
-    projector_suppressed = e2 * e2.transpose();
-  } else {
-    projector_allowed = e2 * e2.transpose() + n * n.transpose();
-    projector_suppressed = e1 * e1.transpose();
-  }
+  const ObservableSubspace subspace = BuildObservableSubspace(anchor);
+  const Eigen::Matrix3d projector_allowed = subspace.projector_R;
+  const Eigen::Matrix3d projector_suppressed =
+      Eigen::Matrix3d::Identity() - projector_allowed;
 
   if (constrained_ref_u) {
     *constrained_ref_u = projector_allowed * prior_u;
@@ -157,7 +140,9 @@ void ImmInformationFilter::InitializeAnchorState(AnchorTrackState* state) const 
 
   state->directional_S.setZero();
   state->directional_quality_sum = 0.0;
+  state->directional_magnitude_sum = 0.0;
   state->directional_persistent = false;
+  state->instantaneous_displacement_evidence = false;
   state->D_max.setZero();
   state->permanent_deformed = false;
 }
@@ -296,8 +281,9 @@ void ImmInformationFilter::Update(AnchorTrackState* state,
       state->P_mix = 0.5 * (state->model1.P + state->model1.P.transpose());
     }
     state->dof_obs = 0;
-    state->chi2_stat = Chi2PseudoInverse(state->x_mix.block<3, 1>(0, 0),
-                                         state->P_mix.block<3, 3>(0, 0));
+    state->chi2_stat = ProjectedChiSquare(
+        state->x_mix.block<3, 1>(0, 0), state->P_mix.block<3, 3>(0, 0),
+        BuildObservableSubspace(anchor), state->dof_obs);
     return;
   }
   state->dead_count = 0;
@@ -312,25 +298,12 @@ void ImmInformationFilter::Update(AnchorTrackState* state,
     r_diag(i) = std::max(1.0e-9, obs.scalars[i].r);
   }
 
-  Eigen::Matrix3d Lambda_meas = Eigen::Matrix3d::Zero();
-  for (int i = 0; i < M; ++i) {
-    Lambda_meas += (obs.scalars[i].h_R * obs.scalars[i].h_R.transpose()) /
-                   std::max(1.0e-9, obs.scalars[i].r);
-  }
-  Lambda_meas = 0.5 * (Lambda_meas + Lambda_meas.transpose());
-
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> meas_eig(Lambda_meas);
-  state->dof_obs = 0;
-  if (meas_eig.info() == Eigen::Success) {
-    for (int i = 0; i < 3; ++i) {
-      if (meas_eig.eigenvalues()(i) > observability_params_.tau_lambda) {
-        ++state->dof_obs;
-      }
-    }
-  }
+  state->dof_obs = std::max(
+      0, std::min(obs.dof_obs, BuildObservableSubspace(anchor).rank));
   if (state->dof_obs == 0) {
-    state->chi2_stat = Chi2PseudoInverse(state->x_mix.block<3, 1>(0, 0),
-                                         state->P_mix.block<3, 3>(0, 0));
+    state->chi2_stat = ProjectedChiSquare(
+        state->x_mix.block<3, 1>(0, 0), state->P_mix.block<3, 3>(0, 0),
+        BuildObservableSubspace(anchor), state->dof_obs);
     return;
   }
 
@@ -409,8 +382,9 @@ void ImmInformationFilter::Update(AnchorTrackState* state,
     state->model1.mu = 1.0;
     state->x_mix = state->model1.x;
     state->P_mix = 0.5 * (state->model1.P + state->model1.P.transpose());
-    state->chi2_stat =
-        Chi2PseudoInverse(state->x_mix.block<3, 1>(0, 0), state->P_mix.block<3, 3>(0, 0));
+    state->chi2_stat = ProjectedChiSquare(
+        state->x_mix.block<3, 1>(0, 0), state->P_mix.block<3, 3>(0, 0),
+        BuildObservableSubspace(anchor), state->dof_obs);
     return;
   }
 
@@ -435,8 +409,9 @@ void ImmInformationFilter::Update(AnchorTrackState* state,
                           (state->model1.x - state->x_mix) *
                               (state->model1.x - state->x_mix).transpose());
   state->P_mix = 0.5 * (state->P_mix + state->P_mix.transpose());
-  state->chi2_stat =
-      Chi2PseudoInverse(state->x_mix.block<3, 1>(0, 0), state->P_mix.block<3, 3>(0, 0));
+  state->chi2_stat = ProjectedChiSquare(
+      state->x_mix.block<3, 1>(0, 0), state->P_mix.block<3, 3>(0, 0),
+      BuildObservableSubspace(anchor), state->dof_obs);
 }
 
 void ImmInformationFilter::UpdateCusum(AnchorTrackState* state) const {
@@ -499,38 +474,60 @@ void ImmInformationFilter::UpdateDirectionalMotion(AnchorTrackState* state,
   if (!directional_params_.enable) {
     state->directional_S.setZero();
     state->directional_quality_sum = 0.0;
+    state->directional_magnitude_sum = 0.0;
     state->directional_persistent = false;
+    state->instantaneous_displacement_evidence = false;
     return;
   }
 
-
-  const Eigen::Vector3d u = state->x_mix.block<3, 1>(0, 0);
+  const ObservableSubspace subspace = BuildObservableSubspace(anchor);
+  const Eigen::Vector3d u = ProjectObservableVector(
+      state->x_mix.block<3, 1>(0, 0), subspace, state->dof_obs);
   const double u_norm = u.norm();
-  const double q = std::max(0.0, std::min(1.0, state->comparable ? cmp_score : 0.0));
+  const double normal_amplitude = std::abs(subspace.basis_R.col(0).dot(u));
+  const double secondary_amplitude =
+      subspace.rank > 1 ? std::abs(subspace.basis_R.col(1).dot(u)) : 0.0;
+  const bool amplitude_gate =
+      anchor.type == AnchorType::PLANE
+          ? normal_amplitude > significance_params_.tau_A_normal
+          : (u_norm > significance_params_.tau_A_norm ||
+             normal_amplitude > significance_params_.tau_A_normal ||
+             secondary_amplitude > significance_params_.tau_A_edge);
+  const double chi2_threshold = Chi2ThresholdByDof(
+      std::max(1, state->dof_obs), significance_params_.alpha_s);
+  state->instantaneous_displacement_evidence =
+      state->gate_state == ObsGateState::OBSERVABLE_MATCHED &&
+      state->comparable && state->dof_obs > 0 &&
+      state->chi2_stat > chi2_threshold && amplitude_gate;
+  const double q = state->instantaneous_displacement_evidence
+                       ? std::max(0.0, std::min(1.0, cmp_score))
+                       : 0.0;
 
 
   const double clamped_dt = std::max(1.0e-3, std::min(5.0, dt));
   const double lambda_dt = std::pow(directional_params_.lambda0, clamped_dt);
-
-  double w = q;
-  if (state->directional_S.norm() >= directional_params_.epsilon && u_norm > 1.0e-9) {
-    const double cos_theta = state->directional_S.normalized().dot(u.normalized());
-    w = q * cos_theta;
+  state->directional_S *= lambda_dt;
+  state->directional_quality_sum *= lambda_dt;
+  state->directional_magnitude_sum *= lambda_dt;
+  if (state->instantaneous_displacement_evidence) {
+    const double time_weighted_quality = q * clamped_dt;
+    state->directional_S += time_weighted_quality * u;
+    state->directional_quality_sum += time_weighted_quality;
+    state->directional_magnitude_sum += time_weighted_quality * u_norm;
   }
-
-  state->directional_S = lambda_dt * state->directional_S + w * u;
-  state->directional_quality_sum = lambda_dt * state->directional_quality_sum + q;
 
 
   const double s_norm = state->directional_S.norm();
-  const double quality_sum = std::max(1.0e-9, state->directional_quality_sum);
+  const double magnitude_sum = std::max(1.0e-9, state->directional_magnitude_sum);
   state->directional_persistent =
       s_norm >= directional_params_.tau_s &&
-      (s_norm / quality_sum) >= directional_params_.tau_c;
+      (s_norm / magnitude_sum) >= directional_params_.tau_c;
 
 
 
-  if (state->directional_persistent && u_norm > state->D_max.norm()) {
+  if (state->directional_persistent &&
+      state->instantaneous_displacement_evidence &&
+      u_norm > state->D_max.norm()) {
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(anchor.Sigma_ref_geom);
     double sigma_anchor = 0.003;
     if (eig.info() == Eigen::Success) {

@@ -102,6 +102,40 @@ deform_monitor:
     tau_graph_support: 0.80
     tau_graph_temporal: 0.85
 
+
+  weak_plane_motion:
+    enable: true
+    enable_mixed_types: true
+    require_exterior_background_for_non_plane: true
+    radius: 0.16
+    component_match_radius: 0.20
+    min_support: 6
+    temporal_window_frames: 5
+    min_current_support: 2
+    min_temporal_frames: 2
+    min_streak: 3
+    min_exterior_background_support: 2
+    component_max_missed_frames: 2
+    min_ref_quality: 0.65
+    min_covariance_quality: 0.75
+    min_type_stability: 0.75
+    min_anchor_disp: 0.003
+    min_group_disp: 0.004
+    min_mean_chi2: 4.0
+    min_direction_consistency: 0.80
+    component_match_direction_cos: 0.80
+    max_normal_deg: 20.0
+    max_group_residual: 0.004
+    streak_decay: 1
+
+  object_association:
+    enable: true
+    invalid_id: 0
+    max_id: 254
+    min_support_points: 3
+    min_purity: 0.80
+    quantization_tolerance: 0.25
+
   anchor:
 
 
@@ -207,7 +241,7 @@ deform_monitor:
   structure_correspondence:
     enable: true
     publish_motions: true
-    publish_markers: true
+    publish_markers: false  # RViz-only marker topic, sim_experiment_recorder.py does not subscribe to it -- disabled to cut PublishResults() cost with zero effect on recorded/analyzed data
     old_min_anchor_count: 2
     new_min_anchor_count: 2
     max_match_distance: 0.60
@@ -242,10 +276,12 @@ deform_monitor:
     show_all_anchors: false
     show_comparable_anchors: false
     show_cluster_boxes: false
+    show_detected_object_boxes: true
     show_cluster_text: false
     text_only_significant: true
     arrows_only_clustered_or_reacquired: true
     min_arrow_disp: 0.010
+    weak_plane_min_arrow_disp: 0.004
     min_arrow_contrast_score: 4.5
     max_arrow_disp: 0.20
     arrow_disp_scale: 10.0
@@ -256,13 +292,16 @@ deform_monitor:
     cluster_outline_alpha: 0.95
     cluster_outline_width: 0.018
     cluster_min_box_size: 0.06
+    detected_object_box_margin: 0.08
+    detected_object_box_min_size: 0.12
+    detected_object_box_alpha: 0.20
 
   risk_visualization:
-    enable: true 
+    enable: true
     publish_evidence: true
-    publish_voxels: true
+    publish_voxels: false  # RViz-only, sim_experiment_recorder.py does not subscribe -- disabled to cut PublishResults() cost
     publish_regions: true
-    publish_markers: true
+    publish_markers: false  # RViz-only, sim_experiment_recorder.py does not subscribe -- disabled to cut PublishResults() cost
     voxel_size: 0.05
     kernel_sigma: 0.08
     kernel_radius: 0.12
@@ -291,7 +330,10 @@ deform_monitor:
     min_confirmed_support_mass: 2.5
     min_confirmed_span: 0.10
     miss_frames_to_fading: 2
-    miss_frames_to_delete: 4
+    miss_frames_to_delete: 8
+    candidate_identity_memory_frames: 4
+    max_prediction_sec: 3.0
+    velocity_ema_alpha: 0.50
     fading_risk_floor: 0.40
     allow_sparse_planar_regions: true
 

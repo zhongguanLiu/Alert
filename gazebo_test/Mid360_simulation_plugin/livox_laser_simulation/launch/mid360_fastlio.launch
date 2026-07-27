@@ -1,18 +1,19 @@
 <?xml version="1.0"?>
 <launch>
   <env name="GAZEBO_MODEL_PATH" value="$(find livox_laser_simulation)/models:$(optenv GAZEBO_MODEL_PATH)" />
-  <arg name="world" default="$(find livox_laser_simulation)/worlds/tracked_mid360_fastlio_collapse_microdeform.world" />
+  <arg name="world" default="$(find livox_laser_simulation)/worlds/tracked_mid360_fastlio_collapse_microdeform_sim.world" />
   <arg name="model" default="$(find livox_laser_simulation)/urdf/mid360_fastlio.urdf.xacro" />
+  <arg name="spawn_robot" default="true" />
   <arg name="gui" default="true" />
   <arg name="rviz" default="false" />
   <arg name="auto_drive" default="false" />
   <arg name="keyboard_teleop" default="true" />
   <arg name="keyboard_linear_speed" default="0.3" />
   <arg name="keyboard_angular_speed" default="0.3" />
-  <arg name="x" default="0.2411761727221079" />
-  <arg name="y" default="5.0452726702409443" />
-  <arg name="z" default="-0.000044917582417425272" />
-  <arg name="yaw" default="-3.058666733186" />
+  <arg name="x" default="1.291112" />
+  <arg name="y" default="-0.854969" />
+  <arg name="z" default="-0.000045" />
+  <arg name="yaw" default="1.570782" />
   <arg name="paused" default="false" />
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
@@ -25,10 +26,6 @@
     <arg name="verbose" value="false" />
   </include>
 
-  
-  
-  <param name="gazebo/publish_period" value="0.1" />
-
   <param name="robot_description" command="$(find xacro)/xacro '$(arg model)'" />
 
   <node
@@ -38,6 +35,7 @@
     output="screen" />
 
   <node
+    if="$(arg spawn_robot)"
     name="spawn_mid360_fastlio"
     pkg="livox_laser_simulation"
     type="spawn_or_replace_model.py"
@@ -78,5 +76,7 @@
     <param name="publish_rate" value="20.0" />
   </node>
 
-  
+  <!-- <include file="$(find fast_lio)/launch/mapping_mid360.launch">
+    <arg name="rviz" value="$(arg rviz)" />
+  </include> -->
 </launch>

@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/risk_visualization_publisher.hpp"
 
 #include <algorithm>
@@ -194,6 +188,15 @@ deform_monitor_v2::RiskEvidenceArray RiskVisualizationPublisher::BuildRiskEviden
     deform_monitor_v2::RiskEvidence out;
     out.id = evidence.id;
     out.anchor_type = static_cast<uint8_t>(evidence.anchor_type);
+    out.object_id = evidence.object_id;
+    out.object_id_valid = evidence.object_id_valid;
+    out.object_id_confidence = evidence.object_id_confidence;
+    out.observed_object_id = evidence.observed_object_id;
+    out.observed_object_id_valid = evidence.observed_object_id_valid;
+    out.observed_object_id_confidence = evidence.observed_object_id_confidence;
+    out.observed_object_id_support_count = evidence.observed_object_id_support_count;
+    out.object_association_state =
+        static_cast<uint8_t>(evidence.object_association_state);
     out.obs_state = static_cast<uint8_t>(evidence.obs_state);
     out.mode = static_cast<uint8_t>(evidence.mode);
     out.position = ToPoint(evidence.position_R);
@@ -224,6 +227,20 @@ deform_monitor_v2::RiskVoxelField RiskVisualizationPublisher::BuildRiskVoxelFiel
   for (const auto& voxel : voxels) {
     deform_monitor_v2::RiskVoxel out;
     out.center = ToPoint(voxel.center_R);
+    out.object_id = voxel.object_id;
+    out.object_id_valid = voxel.object_id_valid;
+    out.object_id_confidence = voxel.object_id_confidence;
+    out.object_id_ambiguous = voxel.object_id_ambiguous;
+    out.observed_object_id = voxel.observed_object_id;
+    out.observed_object_id_valid = voxel.observed_object_id_valid;
+    out.observed_object_id_confidence = voxel.observed_object_id_confidence;
+    out.observed_object_id_ambiguous = voxel.observed_object_id_ambiguous;
+    out.object_association_state =
+        static_cast<uint8_t>(voxel.object_association_state);
+    out.association_consistent_count = voxel.association_consistent_count;
+    out.association_mismatch_count = voxel.association_mismatch_count;
+    out.association_mixed_count = voxel.association_mixed_count;
+    out.association_unavailable_count = voxel.association_unavailable_count;
     out.risk_score = voxel.risk_score;
     out.confidence = voxel.confidence;
     out.displacement_component = voxel.displacement_component;
@@ -247,6 +264,20 @@ deform_monitor_v2::RiskRegions RiskVisualizationPublisher::BuildRiskRegionsMsg(
     deform_monitor_v2::RiskRegion out;
     out.id = region.id;
     out.region_type = static_cast<uint8_t>(region.type);
+    out.object_id = region.object_id;
+    out.object_id_valid = region.object_id_valid;
+    out.object_id_confidence = region.object_id_confidence;
+    out.object_id_ambiguous = region.object_id_ambiguous;
+    out.observed_object_id = region.observed_object_id;
+    out.observed_object_id_valid = region.observed_object_id_valid;
+    out.observed_object_id_confidence = region.observed_object_id_confidence;
+    out.observed_object_id_ambiguous = region.observed_object_id_ambiguous;
+    out.object_association_state =
+        static_cast<uint8_t>(region.object_association_state);
+    out.association_consistent_count = region.association_consistent_count;
+    out.association_mismatch_count = region.association_mismatch_count;
+    out.association_mixed_count = region.association_mixed_count;
+    out.association_unavailable_count = region.association_unavailable_count;
     out.center = ToPoint(region.center_R);
     out.bbox_min = ToPoint(region.bbox_min_R);
     out.bbox_max = ToPoint(region.bbox_max_R);
@@ -263,10 +294,12 @@ deform_monitor_v2::RiskRegions RiskVisualizationPublisher::BuildRiskRegionsMsg(
 deform_monitor_v2::PersistentRiskRegions RiskVisualizationPublisher::BuildPersistentRiskRegionsMsg(
     const PersistentRiskTrackVector& tracks,
     const ros::Time& stamp,
-    const std::string& frame_id) const {
+    const std::string& frame_id,
+    uint32_t reference_epoch) const {
   deform_monitor_v2::PersistentRiskRegions msg;
   msg.header.stamp = stamp;
   msg.header.frame_id = frame_id;
+  msg.reference_epoch = reference_epoch;
   msg.regions.reserve(tracks.size());
   for (const auto& track : tracks) {
     deform_monitor_v2::PersistentRiskRegion out;
@@ -277,6 +310,20 @@ deform_monitor_v2::PersistentRiskRegions RiskVisualizationPublisher::BuildPersis
     out.track_id = track.track_id;
     out.state = ToPersistentRiskStateCode(track.state);
     out.region_type = ToPersistentRiskRegionTypeCode(track.region_type);
+    out.object_id = track.object_id;
+    out.object_id_valid = track.object_id_valid;
+    out.object_id_confidence = track.object_id_confidence;
+    out.object_id_ambiguous = track.object_id_ambiguous;
+    out.observed_object_id = track.observed_object_id;
+    out.observed_object_id_valid = track.observed_object_id_valid;
+    out.observed_object_id_confidence = track.observed_object_id_confidence;
+    out.observed_object_id_ambiguous = track.observed_object_id_ambiguous;
+    out.object_association_state =
+        static_cast<uint8_t>(track.object_association_state);
+    out.association_consistent_count = track.association_consistent_count;
+    out.association_mismatch_count = track.association_mismatch_count;
+    out.association_mixed_count = track.association_mixed_count;
+    out.association_unavailable_count = track.association_unavailable_count;
     out.center = ToPoint(track.last_center_R);
     out.bbox_min = ToPoint(bbox_min);
     out.bbox_max = ToPoint(bbox_max);

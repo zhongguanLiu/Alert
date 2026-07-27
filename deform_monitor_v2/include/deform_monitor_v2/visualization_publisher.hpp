@@ -1,9 +1,3 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #ifndef DEFORM_MONITOR_V2_VISUALIZATION_PUBLISHER_HPP
 #define DEFORM_MONITOR_V2_VISUALIZATION_PUBLISHER_HPP
 
@@ -19,6 +13,7 @@ namespace deform_monitor_v2 {
 
 class VisualizationPublisher {
 public:
+  void SetParams(const VisualizationParams& params);
   void SetParams(const VisualizationParams& params, ros::NodeHandle& nh);
 
   deform_monitor_v2::AnchorStates BuildAnchorStatesMsg(
@@ -26,7 +21,9 @@ public:
       const AnchorStateVector& states,
       const CurrentObservationVector& observations,
       const ros::Time& stamp,
-      const std::string& frame_id) const;
+      const std::string& frame_id,
+      uint32_t reference_epoch,
+      const ros::Time& reference_initialized_at) const;
 
   deform_monitor_v2::MotionClusters BuildMotionClustersMsg(
       const MotionClusterVector& clusters,

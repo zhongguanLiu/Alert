@@ -1,18 +1,16 @@
-/*
- * Author: zgliu@cumt.edu.cn
- * Affiliation: China University of Mining and Technology
- * Open-source release date: 2026-04-20
- */
-
 #include "deform_monitor_v2/core/current_observation_extractor.hpp"
 
 #include "deform_monitor_v2/core/covariance_extractor.hpp"
+#include "deform_monitor_v2/core/edge_feature.hpp"
+#include "deform_monitor_v2/core/object_id_association.hpp"
+#include "deform_monitor_v2/core/observable_subspace.hpp"
 
 #include <Eigen/Eigenvalues>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 
 namespace deform_monitor_v2 {
 
@@ -91,8 +89,24 @@ CurrentObservation BuildObservationFromSupport(const AnchorReference& anchor,
   obs.stamp = pose_cov.stamp;
   obs.cmp_score = support.cmp_score;
   obs.support_count = support.support_count;
+  obs.observed_object_id = support.observed_object_id;
+  obs.observed_object_id_valid = support.observed_object_id_valid;
+  obs.observed_object_id_confidence = support.observed_object_id_confidence;
+  obs.observed_object_id_support_count = support.observed_object_id_support_count;
+  obs.object_association_state = support.object_association_state;
   obs.fit_rmse = support.fit_rmse;
   obs.overlap_score = support.overlap_score;
+  obs.edge_support_count = support.edge_support_count;
+  obs.current_shape_linearity = support.shape_linearity;
+  obs.current_shape_planarity = support.shape_planarity;
+  obs.current_shape_scattering = support.shape_scattering;
+  obs.edge_direction_angle_deg = support.edge_direction_angle_deg;
+  obs.edge_geometry_stability = support.edge_geometry_stability;
+  obs.edge_geometry_valid = support.edge_geometry_valid;
+  obs.reacquisition_score = support.reacquisition_score;
+  obs.reacquisition_innovation_norm = support.reacquisition_innovation_norm;
+  obs.predicted_center_R = support.predicted_center_R;
+  obs.predicted_displacement_R = support.predicted_displacement_R;
   obs.status = support.status;
   obs.gate_state = support.gate_state;
   obs.observable = support.gate_state != ObsGateState::NOT_OBSERVABLE;
@@ -154,23 +168,22 @@ CurrentObservation BuildObservationFromSupport(const AnchorReference& anchor,
     info += (scalar.h_R * scalar.h_R.transpose()) / std::max(1.0e-9, scalar.r);
   }
 
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(info);
-  if (eig.info() != Eigen::Success) {
-    obs.status = ObsStatus::VALID_PARTIAL_OBS;
-    obs.comparable = true;
-    obs.dof_obs = 0;
-    return obs;
-  }
-
+  const ObservableSubspace subspace = BuildObservableSubspace(anchor);
   int rank = 0;
-  for (int i = 0; i < 3; ++i) {
-    if (eig.eigenvalues()(i) > observability_params.tau_lambda) {
-      ++rank;
+  for (int axis = 0; axis < subspace.rank; ++axis) {
+    const Eigen::Vector3d direction = subspace.basis_R.col(axis);
+    const double axis_information = direction.dot(info * direction);
+    if (axis_information <= observability_params.tau_lambda) {
+      break;
     }
+    ++rank;
   }
   obs.dof_obs = rank;
-  obs.status = rank >= 3 ? ObsStatus::VALID_FULL_OBS : ObsStatus::VALID_PARTIAL_OBS;
-  obs.comparable = true;
+  obs.status = ObsStatus::VALID_PARTIAL_OBS;
+  obs.comparable = rank > 0;
+  if (rank == 0) {
+    obs.gate_state = ObsGateState::OBSERVABLE_WEAK;
+  }
   return obs;
 }
 
@@ -201,6 +214,12 @@ void CurrentObservationExtractor::SetObservabilityParams(const ObservabilityPara
 
 void CurrentObservationExtractor::SetMeasurementBuilder(const ScalarMeasurementBuilder& builder) {
   measurement_builder_ = builder;
+}
+
+void CurrentObservationExtractor::SetObjectAssociationParams(
+    const ObjectAssociationParams& params) {
+  object_association_params_ = params;
+  cached_frame_voxel_maps_.clear();
 }
 
 void CurrentObservationExtractor::PrepareSingleFrame(
@@ -240,6 +259,9 @@ CurrentObservationExtractor::BuildFrameVoxelMap(
     cell.point_covariances.push_back(
         CovarianceExtractor::PointCovarianceFromReferencePoint(
             p, frame.lidar_origin_R, frame.pose_cov.Sigma_xi, covariance_params_.sigma_p));
+    if (object_association_params_.enable) {
+      cell.object_id_samples.push_back(pt.intensity);
+    }
     cell.sum_R += p;
     ++cell.total_points;
   }
@@ -348,6 +370,7 @@ CurrentObservationExtractor::BuildPoolFromCachedVoxelMaps(
       AlignedVector<Eigen::Vector3d> points_R;
       AlignedVector<Eigen::Matrix3d> point_covariances;
       std::vector<int> frame_indices;
+      std::vector<float> object_id_samples;
       Eigen::Vector3d sum_R = Eigen::Vector3d::Zero();
       int total_points = 0;
       int visible_frames = 0;
@@ -386,6 +409,11 @@ CurrentObservationExtractor::BuildPoolFromCachedVoxelMaps(
             fused.point_covariances.insert(fused.point_covariances.end(),
                                            cell.point_covariances.begin(),
                                            cell.point_covariances.end());
+            if (object_association_params_.enable) {
+              fused.object_id_samples.insert(fused.object_id_samples.end(),
+                                             cell.object_id_samples.begin(),
+                                             cell.object_id_samples.end());
+            }
             fused.frame_indices.insert(fused.frame_indices.end(),
                                        cell.points_R.size(),
                                        static_cast<int>(frame_idx));
@@ -420,6 +448,9 @@ CurrentObservationExtractor::BuildPoolFromCachedVoxelMaps(
     pool.points_R.reserve(kept_points);
     pool.point_covariances.reserve(kept_points);
     pool.frame_indices.reserve(kept_points);
+    if (object_association_params_.enable) {
+      pool.object_id_samples.reserve(kept_points);
+    }
     for (const auto& kv : fused_voxels) {
       const auto& fused = kv.second;
       if (fused.visible_frames < min_visible_frames ||
@@ -433,6 +464,11 @@ CurrentObservationExtractor::BuildPoolFromCachedVoxelMaps(
       pool.frame_indices.insert(pool.frame_indices.end(),
                                 fused.frame_indices.begin(),
                                 fused.frame_indices.end());
+      if (object_association_params_.enable) {
+        pool.object_id_samples.insert(pool.object_id_samples.end(),
+                                      fused.object_id_samples.begin(),
+                                      fused.object_id_samples.end());
+      }
     }
     return pool;
   }
@@ -474,6 +510,9 @@ CurrentObservationExtractor::BuildPoolFromCachedVoxelMaps(
   pool.points_R.reserve(total_points);
   pool.point_covariances.reserve(total_points);
   pool.frame_indices.reserve(total_points);
+  if (object_association_params_.enable) {
+    pool.object_id_samples.reserve(total_points);
+  }
   for (size_t frame_idx = 0; frame_idx < cached_frame_voxel_maps_.size(); ++frame_idx) {
     const auto& frame_map = cached_frame_voxel_maps_[frame_idx];
     if (!frame_map.valid) {
@@ -502,6 +541,11 @@ CurrentObservationExtractor::BuildPoolFromCachedVoxelMaps(
           pool.frame_indices.insert(pool.frame_indices.end(),
                                     cell.points_R.size(),
                                     static_cast<int>(frame_idx));
+          if (object_association_params_.enable) {
+            pool.object_id_samples.insert(pool.object_id_samples.end(),
+                                          cell.object_id_samples.begin(),
+                                          cell.object_id_samples.end());
+          }
         }
       }
     }
@@ -535,9 +579,14 @@ LocalSupportData CurrentObservationExtractor::BuildSupportAtCenter(
   const double radius2 = search_radius * search_radius;
 
   std::vector<int> selected_frame_indices;
+  std::vector<float> selected_object_id_samples;
   support.support_points_R.reserve(pool.points_R.size());
   support.point_covariances.reserve(pool.point_covariances.size());
   selected_frame_indices.reserve(pool.frame_indices.size());
+  if (object_association_params_.enable &&
+      pool.object_id_samples.size() == pool.points_R.size()) {
+    selected_object_id_samples.reserve(pool.object_id_samples.size());
+  }
   for (size_t i = 0; i < pool.points_R.size(); ++i) {
     const Eigen::Vector3d& p = pool.points_R[i];
     if ((p - candidate_center_R).squaredNorm() > radius2) {
@@ -546,6 +595,25 @@ LocalSupportData CurrentObservationExtractor::BuildSupportAtCenter(
     support.support_points_R.push_back(p);
     support.point_covariances.push_back(pool.point_covariances[i]);
     selected_frame_indices.push_back(pool.frame_indices[i]);
+    if (object_association_params_.enable &&
+        pool.object_id_samples.size() == pool.points_R.size()) {
+      selected_object_id_samples.push_back(pool.object_id_samples[i]);
+    }
+  }
+
+  const ObjectIdAssociationResult association =
+      AssociateObjectIdSamples(selected_object_id_samples, object_association_params_);
+  support.observed_object_id = association.object_id;
+  support.observed_object_id_valid = association.valid;
+  support.observed_object_id_confidence = association.confidence;
+  support.observed_object_id_support_count = association.support_count;
+  if (association.status == ObjectIdAssociationStatus::MIXED) {
+    support.object_association_state = ObjectAssociationState::MIXED;
+  } else if (association.status == ObjectIdAssociationStatus::VALID &&
+             anchor.object_id_valid) {
+    support.object_association_state = association.object_id == anchor.object_id
+                                           ? ObjectAssociationState::CONSISTENT
+                                           : ObjectAssociationState::MISMATCH;
   }
 
   const int min_support_required =
@@ -585,18 +653,34 @@ LocalSupportData CurrentObservationExtractor::BuildSupportAtCenter(
 
   const Eigen::Vector3d evals = eig.eigenvalues();
   const Eigen::Matrix3d evecs = eig.eigenvectors();
+  const double shape_scale = std::max(1.0e-12, evals(2));
+  support.shape_linearity = Clamp01((evals(2) - evals(1)) / shape_scale);
+  support.shape_planarity = Clamp01((evals(1) - evals(0)) / shape_scale);
+  support.shape_scattering = Clamp01(evals(0) / shape_scale);
   support.normal_R = SafeNormalized(evecs.col(0), anchor.normal_R);
   if (support.normal_R.dot(anchor.normal_R) < 0.0) {
     support.normal_R = -support.normal_R;
   }
-  const Eigen::Vector3d dominant = SafeNormalized(evecs.col(2), anchor.basis_R.col(1));
-  support.edge_normal_R = dominant - dominant.dot(support.normal_R) * support.normal_R;
-  support.edge_normal_R = SafeNormalized(support.edge_normal_R, anchor.edge_normal_R);
+  Eigen::Vector3d tangent_R = evecs.col(2) - evecs.col(2).dot(support.normal_R) * support.normal_R;
+  tangent_R = SafeNormalized(tangent_R, anchor.basis_R.col(1));
+  support.edge_normal_R = SafeNormalized(tangent_R.cross(support.normal_R),
+                                         anchor.edge_normal_R);
   if (support.edge_normal_R.dot(anchor.edge_normal_R) < 0.0) {
     support.edge_normal_R = -support.edge_normal_R;
   }
+  support.edge_direction_angle_deg =
+      AngleBetweenDeg(support.edge_normal_R, anchor.edge_normal_R);
   support.band_axis_R = SafeNormalized(support.normal_R.cross(support.edge_normal_R),
                                        anchor.basis_R.col(1));
+  const double direction_stability =
+      std::max(0.0, std::cos(Deg2Rad(support.edge_direction_angle_deg)));
+  support.edge_geometry_stability =
+      Clamp01(std::min(anchor.type_stability, support.shape_linearity) * direction_stability);
+  support.edge_geometry_valid =
+      anchor.type == AnchorType::EDGE &&
+      anchor.type_stability >= params_.edge_min_type_stability &&
+      support.shape_linearity >= params_.edge_min_linearity &&
+      support.edge_direction_angle_deg <= params_.edge_max_direction_deg;
 
   support.fit_rmse = std::sqrt(std::max(0.0, evals(0)));
   support.view_dir_R.setZero();
@@ -653,23 +737,61 @@ LocalSupportData CurrentObservationExtractor::BuildSupportAtCenter(
     }
   }
 
-  support.edge_centroid_R.setZero();
-  int edge_count = 0;
-  for (const auto& p : support.support_points_R) {
-    if (anchor.edge_normal_R.dot(p - support.centroid_R) <= 0.0) {
-      continue;
+  const EdgeFeatureGeometry edge = ComputeEdgeFeatureGeometry(
+      support.support_points_R, support.centroid_R, anchor.edge_normal_R);
+  support.edge_support_count = static_cast<int>(edge.point_indices.size());
+  if (edge.valid) {
+    support.edge_centroid_R = edge.center_R;
+    support.edge_centroid_cov.setZero();
+
+    const double edge_count = static_cast<double>(edge.point_indices.size());
+    std::vector<int> edge_frame_support_counts(pool.frame_pose_covs.size(), 0);
+    for (const size_t index : edge.point_indices) {
+      if (index >= support.point_covariances.size()) {
+        continue;
+      }
+      support.edge_centroid_cov += support.point_covariances[index];
+      const int frame_idx = selected_frame_indices[index];
+      if (frame_idx >= 0 && frame_idx < static_cast<int>(edge_frame_support_counts.size())) {
+        ++edge_frame_support_counts[static_cast<size_t>(frame_idx)];
+      }
     }
-    support.edge_centroid_R += p;
-    ++edge_count;
-  }
-  if (edge_count > 0) {
-    support.edge_centroid_R /= static_cast<double>(edge_count);
-    support.edge_centroid_cov = support.centroid_cov *
-                                static_cast<double>(support.support_count) /
-                                static_cast<double>(edge_count * edge_count);
+    support.edge_centroid_cov /= edge_count * edge_count;
+    support.edge_centroid_cov += edge.sample_cov / edge_count;
+
+    if (pool.frame_pose_covs.size() > 1) {
+      for (size_t frame_idx = 0; frame_idx < edge_frame_support_counts.size(); ++frame_idx) {
+        const int count = edge_frame_support_counts[frame_idx];
+        if (count <= 0) {
+          continue;
+        }
+        const double count_d = static_cast<double>(count);
+        const double w_corr = (count_d / edge_count) * (count_d / edge_count);
+        const double w_ind = count_d / (edge_count * edge_count);
+        const double extra_w = std::max(0.0, w_corr - w_ind);
+        if (extra_w <= 0.0) {
+          continue;
+        }
+        support.edge_centroid_cov +=
+            extra_w * temporal_params_.pose_corr_inflation *
+            PoseOnlyPointCovariance(support.edge_centroid_R,
+                                    pool.frame_origins_R[frame_idx],
+                                    pool.frame_pose_covs[frame_idx].Sigma_xi);
+      }
+      if (pool.window_span_sec > 1.0e-6) {
+        const double sigma_blur =
+            temporal_params_.sigma_motion_per_sec * pool.window_span_sec;
+        support.edge_centroid_cov +=
+            Eigen::Matrix3d::Identity() * sigma_blur * sigma_blur;
+      }
+    }
+    support.edge_centroid_cov =
+        0.5 * (support.edge_centroid_cov + support.edge_centroid_cov.transpose());
+    support.edge_centroid_cov += Eigen::Matrix3d::Identity() * 1.0e-9;
   } else {
     support.edge_centroid_R = support.centroid_R;
     support.edge_centroid_cov = support.centroid_cov;
+    support.edge_geometry_valid = false;
   }
   support.band_centroid_R = support.centroid_R;
   support.band_centroid_cov = support.centroid_cov;
@@ -750,11 +872,19 @@ void CurrentObservationExtractor::EvaluateComparability(const AnchorReference& a
 
 LocalSupportData CurrentObservationExtractor::BuildSupportForAnchorFromCachedMaps(
     const AnchorReference& anchor,
-    const Eigen::Vector3d& lidar_origin_R) const {
+    const Eigen::Vector3d& lidar_origin_R,
+    const Eigen::Vector3d& predicted_displacement_R) const {
+  const ObservableSubspace subspace = BuildObservableSubspace(anchor);
+  const Eigen::Vector3d observable_prediction_R =
+      ProjectObservableVector(predicted_displacement_R, subspace);
+  const Eigen::Vector3d predicted_center_R = anchor.center_R + observable_prediction_R;
+
   LocalSupportData empty_support;
   empty_support.anchor_id = anchor.id;
   empty_support.status = ObsStatus::INVALID_NO_COMPARISON;
   FillExpectedObservability(anchor, lidar_origin_R, params_, &empty_support);
+  empty_support.predicted_displacement_R = observable_prediction_R;
+  empty_support.predicted_center_R = predicted_center_R;
   empty_support.gate_state = DetermineGateState(empty_support, params_);
 
   NearbySupportPool pool = BuildPoolFromCachedVoxelMaps(anchor);
@@ -763,6 +893,12 @@ LocalSupportData CurrentObservationExtractor::BuildSupportForAnchorFromCachedMap
   }
 
   LocalSupportData local_support = BuildSupportAtCenter(anchor, pool, anchor.center_R);
+  local_support.predicted_displacement_R = observable_prediction_R;
+  local_support.predicted_center_R = predicted_center_R;
+  if (local_support.valid) {
+    local_support.reacquisition_innovation_norm =
+        (local_support.centroid_R - predicted_center_R).norm();
+  }
   if (local_support.comparable) {
     return local_support;
   }
@@ -775,14 +911,25 @@ LocalSupportData CurrentObservationExtractor::BuildSupportForAnchorFromCachedMap
 
   LocalSupportData best_support = local_support;
   double best_score = -std::numeric_limits<double>::infinity();
+  double best_diagnostic_score = -std::numeric_limits<double>::infinity();
+  double best_diagnostic_innovation = local_support.reacquisition_innovation_norm;
   if (static_cast<int>(pool.candidate_centers_R.size()) >=
       std::max(params_.min_support_scalar, 2)) {
-    const int stride = std::max(
-        1, static_cast<int>(pool.candidate_centers_R.size()) /
-               std::max(1, params_.max_reacquire_candidates));
-    for (size_t i = 0; i < pool.candidate_centers_R.size(); i += static_cast<size_t>(stride)) {
+    std::vector<size_t> candidate_indices(pool.candidate_centers_R.size());
+    std::iota(candidate_indices.begin(), candidate_indices.end(), 0);
+    std::sort(candidate_indices.begin(), candidate_indices.end(),
+              [&](size_t lhs, size_t rhs) {
+                return (pool.candidate_centers_R[lhs] - predicted_center_R).squaredNorm() <
+                       (pool.candidate_centers_R[rhs] - predicted_center_R).squaredNorm();
+              });
+    const size_t candidate_limit = std::min(
+        candidate_indices.size(),
+        static_cast<size_t>(std::max(1, params_.max_reacquire_candidates)));
+    for (size_t candidate_order = 0; candidate_order < candidate_limit; ++candidate_order) {
+      const size_t i = candidate_indices[candidate_order];
       const Eigen::Vector3d& candidate_center_R = pool.candidate_centers_R[i];
-      if ((candidate_center_R - anchor.center_R).norm() < 0.01) {
+      if ((candidate_center_R - predicted_center_R).norm() >
+          params_.reacquire_max_innovation + params_.current_voxel_size) {
         continue;
       }
       LocalSupportData candidate_support =
@@ -790,31 +937,29 @@ LocalSupportData CurrentObservationExtractor::BuildSupportForAnchorFromCachedMap
       if (!candidate_support.valid || !candidate_support.comparable) {
         continue;
       }
-      const double min_shift =
-          anchor.type == AnchorType::PLANE
-              ? std::max(0.010, 0.08 * params_.reacquire_radius)
-              : std::max(0.015, 0.10 * params_.reacquire_radius);
-      if (candidate_support.center_shift_norm < min_shift) {
-        continue;
-      }
-      if (anchor.type == AnchorType::PLANE &&
-          candidate_support.normal_angle_deg > params_.tau_n_deg) {
-        continue;
-      }
-      const double shift_bonus = Clamp01(candidate_support.center_shift_norm /
-                                         std::max(0.02, params_.reacquire_radius));
+      candidate_support.predicted_displacement_R = observable_prediction_R;
+      candidate_support.predicted_center_R = predicted_center_R;
+      candidate_support.reacquisition_innovation_norm =
+          (candidate_support.centroid_R - predicted_center_R).norm();
       const double quality_bonus = Clamp01(1.0 - candidate_support.fit_rmse / 0.02);
-      const double score =
-          anchor.type == AnchorType::PLANE
-              ? 0.65 * candidate_support.cmp_score +
-                    0.20 * shift_bonus +
-                    0.15 * quality_bonus
-              : candidate_support.cmp_score + 0.10 * shift_bonus;
-      const double tau_reacquire =
-          anchor.type == AnchorType::PLANE
-              ? std::max(0.74, params_.tau_reacquire)
-              : std::max(0.58, params_.tau_reacquire - 0.12);
-      if (score >= std::max(tau_reacquire, best_score)) {
+      const double innovation_scale = std::max(1.0e-3, params_.reacquire_innovation_scale);
+      const double normalized_innovation =
+          candidate_support.reacquisition_innovation_norm / innovation_scale;
+      const double innovation_score =
+          std::exp(-0.5 * normalized_innovation * normalized_innovation);
+      const double score = 0.75 * candidate_support.cmp_score +
+                           0.15 * quality_bonus +
+                           0.10 * innovation_score;
+      candidate_support.reacquisition_score = score;
+      if (score > best_diagnostic_score) {
+        best_diagnostic_score = score;
+        best_diagnostic_innovation = candidate_support.reacquisition_innovation_norm;
+      }
+      if (candidate_support.reacquisition_innovation_norm >
+          params_.reacquire_max_innovation) {
+        continue;
+      }
+      if (score >= std::max(params_.tau_reacquire, best_score)) {
         best_score = score;
         candidate_support.reacquired = true;
         best_support = candidate_support;
@@ -826,6 +971,10 @@ LocalSupportData CurrentObservationExtractor::BuildSupportForAnchorFromCachedMap
     best_support.status = ObsStatus::VALID_PARTIAL_OBS;
     best_support.comparable = true;
     return best_support;
+  }
+  if (std::isfinite(best_diagnostic_score)) {
+    best_support.reacquisition_score = best_diagnostic_score;
+    best_support.reacquisition_innovation_norm = best_diagnostic_innovation;
   }
   if (local_support.comparable) {
     return local_support;
@@ -848,7 +997,8 @@ LocalSupportData CurrentObservationExtractor::BuildSupportForAnchor(
   }
 
   EnsureSingleFrameVoxelMap(curr_cloud, curr_pose_cov, lidar_origin_R);
-  return BuildSupportForAnchorFromCachedMaps(anchor, lidar_origin_R);
+  return BuildSupportForAnchorFromCachedMaps(
+      anchor, lidar_origin_R, Eigen::Vector3d::Zero());
 }
 
 LocalSupportData CurrentObservationExtractor::BuildSupportForAnchorTemporal(
@@ -862,14 +1012,17 @@ LocalSupportData CurrentObservationExtractor::BuildSupportForAnchorTemporal(
   }
 
   EnsureWindowVoxelMaps(frames);
-  return BuildSupportForAnchorFromCachedMaps(anchor, frames.back().lidar_origin_R);
+  return BuildSupportForAnchorFromCachedMaps(
+      anchor, frames.back().lidar_origin_R, Eigen::Vector3d::Zero());
 }
 
 CurrentObservation CurrentObservationExtractor::ExtractForAnchorFromPreparedCache(
     const AnchorReference& anchor,
     const PoseCov6D& pose_cov,
-    const Eigen::Vector3d& lidar_origin_R) const {
-  const LocalSupportData support = BuildSupportForAnchorFromCachedMaps(anchor, lidar_origin_R);
+    const Eigen::Vector3d& lidar_origin_R,
+    const Eigen::Vector3d& predicted_displacement_R) const {
+  const LocalSupportData support = BuildSupportForAnchorFromCachedMaps(
+      anchor, lidar_origin_R, predicted_displacement_R);
   return BuildObservationFromSupport(anchor,
                                      support,
                                      pose_cov,
