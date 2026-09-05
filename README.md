@@ -4,7 +4,22 @@
   <strong>LiDAR Early Warning of Structural Deformation for Robotic Rescue</strong>
 </p>
 
-The demo video is currently in production and is expected to be uploaded and linked here on August 5, 2026.
+## Publication
+
+Our paper, [**“ALERT: LiDAR Early Warning of Structural Deformation for Robotic Rescue”**](https://ieeexplore.ieee.org/document/11672845), is now available in Early Access in *IEEE Transactions on Instrumentation and Measurement*.
+
+Z. Liu, S. Yuan, W. Li, and L. Pan, “ALERT: LiDAR Early Warning of Structural Deformation for Robotic Rescue,” *IEEE Transactions on Instrumentation and Measurement*, 2026, doi: [10.1109/TIM.2026.3728971](https://doi.org/10.1109/TIM.2026.3728971).
+
+## Demonstration Videos
+
+[![ALERT real-world demonstration](media/alert-real-world-preview.png)](media/alert-real-world-demo.mp4)
+
+Click the image above to view the real-world demonstration.
+
+- [Simulation demonstration](media/alert-simulation-demo.mp4)
+- [Real-world point-cloud demonstration](media/alert-point-cloud-demo.mp4)
+
+These demonstrations correspond to the simulation and real-world experiments presented in the paper.
 
 ## 1. Overview
 
